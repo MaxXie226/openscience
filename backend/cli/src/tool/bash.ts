@@ -16,6 +16,7 @@ import { Shell } from "@/shell/shell"
 import { BashArity } from "@/permission/arity"
 import { Truncate } from "./truncation"
 import { OpenScience } from "@/openscience"
+import { Refuse } from "@/package/refuse"
 import { Sandbox } from "@/sandbox/sandbox"
 import { EgressRuntime } from "@/sandbox/egress-runtime"
 import { SessionFilesystem } from "@/session/filesystem"
@@ -196,6 +197,12 @@ export const BashTool = Tool.define("bash", async () => {
           }
           command.push(child.text)
         }
+
+        // Before any ctx.ask, before the sandbox is composed, before anything
+        // runs: refusing after prompting would ask the user to approve a
+        // command that is then refused anyway.
+        const refusal = Refuse.installer(command)
+        if (refusal) throw new Error(refusal)
 
         // not an exhaustive list, but covers most common cases
         if (["cd", "rm", "cp", "mv", "mkdir", "touch", "chmod", "chown", "cat"].includes(command[0])) {
