@@ -686,6 +686,25 @@ export namespace ComputeJobs {
     }
   }
 
+  /**
+   * The network policy that actually applies to an SSH transport.
+   *
+   * "allowlist" is relaxed to "allow" because that policy is HTTP-only: it
+   * severs the network namespace and offers one HTTP proxy socket, which ssh
+   * cannot use at all — it does not read HTTP_PROXY and needs ProxyCommand or
+   * SOCKS. Applying it to ssh is not bounded egress, it is denial with a
+   * confusing error, and it buys nothing: the job's command runs on the remote
+   * machine, so the process being confined is a transport rather than the
+   * workload.
+   *
+   * An explicit "deny" is left alone. That is a user saying no network, not a
+   * default they never chose, and honouring it is the difference between
+   * relaxing a default and overriding an instruction.
+   */
+  export function transportNetwork(requested: "deny" | "allowlist" | "allow") {
+    return requested === "allowlist" ? ("allow" as const) : requested
+  }
+
   async function launch(
     job: Job,
     host: Host | undefined,
@@ -694,22 +713,50 @@ export namespace ComputeJobs {
   ): Promise<Launch> {
     const spec = command(job, host)
     if (host) {
-      const egress = await EgressRuntime.egressFor(authority.sandbox)
+      // The ssh CLIENT is what gets wrapped here; the job's command runs on the
+      // remote machine. Two consequences.
+      //
+      // Network containment of this process buys nothing — the code being
+      // confined is a transport, not the workload — and under "allowlist" it
+      // actively breaks the feature: that policy severs the network namespace
+      // and offers one HTTP proxy socket as the only route out, which ssh
+      // cannot use. It reads HTTP_PROXY not at all and needs ProxyCommand or
+      // SOCKS. So an allowlist remote job did not fail closed with a useful
+      // message, it failed with an opaque connection error on the default
+      // policy.
+      //
+      // Filesystem containment still matters and is kept: ssh reads keys and
+      // can write locally. Only the network dimension is relaxed, and the value
+      // reported below is the one actually applied, not the one requested —
+      // reporting "allowlist" for a process running unconfined would be worse
+      // than the original bug.
+      const network = transportNetwork(authority.sandbox.network)
+      const relaxed = { ...authority.sandbox, network }
+      const egress = await EgressRuntime.egressFor(relaxed)
       const planned = Sandbox.wrapArgv({
         file: spec.argv[0]!,
         args: spec.argv.slice(1),
         workspace: authority.writable,
         unreadable: OpenScience.kernelSensitivePaths(),
-        options: { ...authority.sandbox, egress },
+        options: { ...relaxed, egress },
       })
+      const note =
+        network === authority.sandbox.network
+          ? planned.warning
+          : [
+              planned.warning,
+              "network left unconfined for the ssh transport: the allowlist proxy is HTTP-only and ssh cannot use it. The job's own command runs on the remote host, outside this sandbox either way.",
+            ]
+              .filter(Boolean)
+              .join(" ")
       return {
         argv: [planned.file, ...planned.args],
         sandbox: {
           requested: authority.sandbox.enabled,
           enforced: planned.sandboxed,
           backend: planned.backend,
-          network: authority.sandbox.network,
-          warning: planned.warning,
+          network,
+          warning: note,
         },
         env: planned.env,
       }

@@ -1634,3 +1634,35 @@ describe("ComputeJobs project boundaries", () => {
     }
   })
 })
+
+describe("ComputeJobs ssh transport network policy", () => {
+  test("allowlist is relaxed, because the allowlist proxy is HTTP-only", () => {
+    // The bug: under "allowlist" the ssh CLIENT was wrapped in a severed
+    // network namespace whose only exit is an HTTP proxy socket. ssh does not
+    // read HTTP_PROXY and cannot use it, so remote jobs failed with an opaque
+    // connection error on the shipped default policy.
+    expect(ComputeJobs.transportNetwork("allowlist")).toBe("allow")
+  })
+
+  test("an explicit deny is honoured, not overridden", () => {
+    // The line between relaxing a default nobody chose and overriding an
+    // instruction somebody gave. A user who set "deny" means it.
+    expect(ComputeJobs.transportNetwork("deny")).toBe("deny")
+  })
+
+  test("allow is unchanged", () => {
+    expect(ComputeJobs.transportNetwork("allow")).toBe("allow")
+  })
+
+  test("the relaxation is reported, never silent", async () => {
+    // Reporting "allowlist" for a process actually running unconfined would be
+    // worse than the original bug, so the launch path reports the policy it
+    // applied and says why.
+    const source = await Bun.file(new URL("../../src/compute/jobs.ts", import.meta.url).pathname).text()
+    expect(source.includes("network left unconfined for the ssh transport")).toBe(true)
+    // The ssh branch reports the policy it APPLIED. The local-job branch below
+    // it still reports authority.sandbox.network, and correctly so — there the
+    // requested policy is the applied one, and nothing is relaxed.
+    expect(source.includes("const network = transportNetwork(authority.sandbox.network)")).toBe(true)
+  })
+})
