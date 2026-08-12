@@ -38,7 +38,10 @@ test("a live pid with no token available still reconciles as running", async () 
 test("a claim by a dead pid reconciles as unknown, not as success", async () => {
   const project = "proj_reconcile_dead"
   await seed(project, "dead")
-  const proc = Bun.spawn(["/bin/true"], { stdout: "ignore", stderr: "ignore" })
+  // process.execPath, not /bin/true: that path does not exist on macOS (it is
+  // /usr/bin/true there), and posix_spawn's ENOENT surfaced as this test
+  // failing for a reason unrelated to reconcile. Bun is by definition present.
+  const proc = Bun.spawn([process.execPath, "-e", ""], { stdout: "ignore", stderr: "ignore" })
   const pid = proc.pid
   const captured = KernelProcessIdentity.startToken(pid)
   await proc.exited
