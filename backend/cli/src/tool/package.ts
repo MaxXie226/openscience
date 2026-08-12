@@ -3,6 +3,7 @@ import { Environment } from "../package/environment"
 import { Installer } from "../package/installer"
 import { Requirement } from "../package/requirement"
 import { Instance } from "../project/instance"
+import { KernelProcessIdentity } from "../science/kernel/process"
 import { KernelRuntime } from "../science/kernel/registry"
 import { Tool } from "./tool"
 
@@ -40,6 +41,12 @@ export const PackageTool = Tool.define("package_install", {
       .boolean()
       .default(false)
       .describe("Allow source builds. Default is wheels-only, which is faster and more reliable."),
+    wait: z
+      .boolean()
+      .default(true)
+      .describe(
+        "Wait for the install to finish and report the versions it landed. Set false only for a long install; you then get no versions back and must not claim it succeeded.",
+      ),
   }),
   async execute(params, ctx) {
     const project = Instance.project.id
@@ -107,7 +114,37 @@ export const PackageTool = Tool.define("package_install", {
       metadata: { environment: name, packages: params.packages, index: DEFAULT_INDEX },
     })
 
-    return await Environment.lock(project, name, async () => {
+    // Dispatch without waiting. The lock is still taken, so a second install
+    // queues exactly as it would otherwise; what changes is that this turn does
+    // not hold open for it. The claim is written before returning so a CLI
+    // restart mid-install can tell "still running" from "died", and the output
+    // deliberately reports no versions — there are none yet, and inventing them
+    // is precisely what the contract forbids.
+    if (params.wait === false) {
+      const running = Environment.lock(project, name, async () => {
+        await Environment.claim(project, name, process.pid, KernelProcessIdentity.startToken(process.pid))
+        try {
+          return await install()
+        } finally {
+          await Environment.release(project, name)
+        }
+      })
+      // Not awaited, but not unhandled either: an unobserved rejection here
+      // would surface as a process-level warning with no context.
+      running.catch(() => undefined)
+      return {
+        title: `Installing · ${name}`,
+        output: [
+          `Started installing ${params.packages.join(", ")} into ${name}.`,
+          `It is still running. Do not execute in this environment, and do not report a version, until a later call confirms what landed.`,
+        ].join("\n"),
+        metadata: { environment: name, installed: false, ok: true, additive: true, versions: {}, total: 0 },
+      }
+    }
+
+    return await Environment.lock(project, name, install)
+
+    async function install() {
       const tool = await Installer.probe(directory)
       await Installer.create(directory, tool)
 
@@ -174,6 +211,6 @@ export const PackageTool = Tool.define("package_install", {
           total: Object.keys(after).length,
         },
       }
-    })
+    }
   },
 })

@@ -103,7 +103,7 @@ test("after a real install, the agent's contract lists what it installed", async
       const before = await PackagePrompt.system(Instance.project.id)
       expect(before).toContain("No environments exist yet")
 
-      await tool.execute({ packages: ["tqdm"], environment: "seen", language: "python", source: false }, {
+      await tool.execute({ packages: ["tqdm"], environment: "seen", language: "python", source: false, wait: true }, {
         sessionID: session.id,
         messageID: "",
         callID: "",

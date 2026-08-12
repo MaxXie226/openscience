@@ -94,7 +94,7 @@ test.skipIf(!live)(
         const tool = await PackageTool.init()
         const { asks, ctx } = await context()
         const result = await tool.execute(
-          { packages: ["tqdm"], environment: "t1", language: "python" as const, source: false },
+          { packages: ["tqdm"], environment: "t1", language: "python" as const, source: false, wait: true },
           ctx,
         )
 
@@ -129,13 +129,13 @@ test.skipIf(!live)(
         const tool = await PackageTool.init()
         const first = await context()
         await tool.execute(
-          { packages: ["tqdm"], environment: "t2", language: "python" as const, source: false },
+          { packages: ["tqdm"], environment: "t2", language: "python" as const, source: false, wait: true },
           first.ctx,
         )
 
         const second = await context()
         const result = await tool.execute(
-          { packages: ["tqdm"], environment: "t2", language: "python" as const, source: false },
+          { packages: ["tqdm"], environment: "t2", language: "python" as const, source: false, wait: true },
           second.ctx,
         )
         // Nothing privileged happens, so nothing needs approving — and a
@@ -163,12 +163,12 @@ test.skipIf(!live)(
         const { PackageTool } = await import("../../src/tool/package")
         const tool = await PackageTool.init()
         await tool.execute(
-          { packages: ["six==1.16.0"], environment: "pin", language: "python", source: false },
+          { packages: ["six==1.16.0"], environment: "pin", language: "python", source: false, wait: true },
           (await context()).ctx,
         )
         const upgrade = await context()
         const result = await tool.execute(
-          { packages: ["six==1.17.0"], environment: "pin", language: "python", source: false },
+          { packages: ["six==1.17.0"], environment: "pin", language: "python", source: false, wait: true },
           upgrade.ctx,
         )
         // It really ran, it really asked, and it knows the change was not additive.
@@ -199,6 +199,7 @@ test.skipIf(!live)(
               environment: "t3",
               language: "python" as const,
               source: false,
+              wait: true,
             },
             ctx,
           )

@@ -97,6 +97,70 @@ export namespace Environment {
     return Object.entries(before).every(([name, version]) => after[name] === version)
   }
 
+  /**
+   * A persisted record that an installer is working on this environment, with
+   * enough identity to tell "still running" from "died mid-install" after a CLI
+   * restart. pid alone is not enough — pids are reused — so the platform start
+   * token rides along, the same guard `science/kernel/process.ts` already
+   * applies to kernels. The token is optional because it does not exist on
+   * every platform.
+   *
+   * Under `Global.Path.state`, not `data`: this is per-machine liveness, not
+   * something to survive a restore onto another machine.
+   */
+  const Claim = z.object({ pid: z.number().int(), token: z.string().optional(), startedAt: z.number() })
+
+  export function claimPath(projectID: string, name: string) {
+    return path.join(Global.Path.state, "envs", projectID, `${name}.claim.json`)
+  }
+
+  export async function claim(projectID: string, name: string, pid: number, value?: string) {
+    const file = claimPath(projectID, name)
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await Bun.write(file, JSON.stringify({ pid, token: value, startedAt: Date.now() }))
+  }
+
+  export async function release(projectID: string, name: string) {
+    await fs.rm(claimPath(projectID, name), { force: true })
+  }
+
+  /**
+   * Resolve every outstanding claim for a project.
+   *
+   * An install that cannot be proven still running is `unknown`, never `fine`:
+   * pip has no transactions, so an interrupted one may have left a partial
+   * tree, and silently trusting it turns into a mystery ImportError several
+   * turns later. "Cannot prove" means the process is gone, or a token that was
+   * captured no longer matches — NOT merely that no token exists, which is the
+   * ordinary case on Windows.
+   *
+   * Resolved claims are deleted so a second call does not re-report them; a
+   * still-running one is left in place, because it is still true.
+   */
+  export async function reconcile(projectID: string) {
+    const { KernelProcessIdentity } = await import("../science/kernel/process")
+    const dir = path.join(Global.Path.state, "envs", projectID)
+    const names = await fs.readdir(dir).catch(() => [] as string[])
+    const out: { name: string; outcome: "running" | "unknown" }[] = []
+    for (const file of names.filter((n) => n.endsWith(".claim.json"))) {
+      const name = file.slice(0, -".claim.json".length)
+      const parsed = Claim.safeParse(
+        await Bun.file(path.join(dir, file))
+          .json()
+          .catch(() => undefined),
+      )
+      if (!parsed.success) {
+        await fs.rm(path.join(dir, file), { force: true })
+        out.push({ name, outcome: "unknown" })
+        continue
+      }
+      const alive = KernelProcessIdentity.running(parsed.data.pid, parsed.data.token)
+      if (!alive) await fs.rm(path.join(dir, file), { force: true })
+      out.push({ name, outcome: alive ? "running" : "unknown" })
+    }
+    return out
+  }
+
   const held = new Map<string, Promise<unknown>>()
 
   const slot = (projectID: string, name: string) => `${projectID} ${name}`

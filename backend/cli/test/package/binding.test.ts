@@ -100,7 +100,7 @@ test.skipIf(!live)(
       fn: async () => {
         const install = await PackageTool.init()
         await install.execute(
-          { packages: ["tqdm"], environment: "bound", language: "python", source: false },
+          { packages: ["tqdm"], environment: "bound", language: "python", source: false, wait: true },
           await context(),
         )
 
@@ -121,7 +121,7 @@ test.skipIf(!live)(
         // isolation: findPython deliberately falls back to the host
         // interpreter, and the host may well have tqdm — measured, it does.
         await install.execute(
-          { packages: ["six"], environment: "other", language: "python", source: false },
+          { packages: ["six"], environment: "other", language: "python", source: false, wait: true },
           await context(),
         )
         const elsewhere = await notebook.execute(
@@ -171,7 +171,7 @@ test.skipIf(!live)(
             .metadata.output
 
         await install.execute(
-          { packages: ["six==1.16.0"], environment: "restart", language: "python", source: false },
+          { packages: ["six==1.16.0"], environment: "restart", language: "python", source: false, wait: true },
           shared,
         )
         await cell("marker = 'alive'")
@@ -180,7 +180,7 @@ test.skipIf(!live)(
         // Additive: a package that was not there before. A live kernel stays
         // correct, because a new module imports on first use.
         const additive = await install.execute(
-          { packages: ["tqdm"], environment: "restart", language: "python", source: false },
+          { packages: ["tqdm"], environment: "restart", language: "python", source: false, wait: true },
           shared,
         )
         expect(additive.metadata.additive).toBe(true)
@@ -190,7 +190,7 @@ test.skipIf(!live)(
         // interpreter would stay at 1.16.0 in memory while the files on disk say
         // 1.17.0 — silently wrong, which is why this restarts.
         const changed = await install.execute(
-          { packages: ["six==1.17.0"], environment: "restart", language: "python", source: false },
+          { packages: ["six==1.17.0"], environment: "restart", language: "python", source: false, wait: true },
           shared,
         )
         expect(changed.metadata.additive).toBe(false)
