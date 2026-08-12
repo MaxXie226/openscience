@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import fs from "fs"
 import path from "path"
 import { Installer } from "../../src/package/installer"
 import { InstallerR } from "../../src/package/installer-r"
@@ -85,4 +86,51 @@ test.skipIf(!rscript)(
     expect(await InstallerR.verify(env, ["definitelyNotARealCranPackage"])).toEqual({})
   },
   600_000,
+)
+
+test.skipIf(!rscript)(
+  "a real CRAN package installs into the environment library and reports its version",
+  async () => {
+    // The gap the existing live tests left: both of them assert FAILURE paths
+    // (an empty library, a package CRAN does not have), so nothing anywhere
+    // proved an R install can succeed at all.
+    //
+    // `praise` is pure R, a few kilobytes, and has no dependencies — CRAN
+    // serves Linux packages as source, so anything with compiled code would be
+    // testing a toolchain rather than this installer.
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "renv")
+    const result = await InstallerR.install({ directory: env, packages: ["praise"] })
+    expect(result.ok, result.log).toBe(true)
+
+    const versions = await InstallerR.verify(env, ["praise"])
+    expect(versions["praise"]).toMatch(/^\d/)
+
+    // It landed in the environment's own library, not a system or user one —
+    // the whole point of passing `lib` explicitly rather than trusting
+    // .libPaths() ordering.
+    expect(Object.keys(await InstallerR.freeze(env))).toContain("praise")
+    expect(fs.existsSync(path.join(Installer.rlibrary(env), "praise"))).toBe(true)
+  },
+  900_000,
+)
+
+test.skipIf(!rscript)(
+  "a second package is additive alongside the first",
+  async () => {
+    // Mirrors the Python additivity check: the tool decides whether to restart
+    // kernels from freeze() before and after, so an R install has to report a
+    // growing set rather than replacing it.
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "renv")
+    await InstallerR.install({ directory: env, packages: ["praise"] })
+    const before = await InstallerR.freeze(env)
+    await InstallerR.install({ directory: env, packages: ["R6"] })
+    const after = await InstallerR.freeze(env)
+    expect(Object.keys(after)).toContain("praise")
+    expect(Object.keys(after)).toContain("R6")
+    const { Environment } = await import("../../src/package/environment")
+    expect(Environment.additive(before, after)).toBe(true)
+  },
+  900_000,
 )

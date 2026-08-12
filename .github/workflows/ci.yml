@@ -98,6 +98,18 @@ jobs:
             echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
           fi
           bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --die-with-parent -- true
+      # R is the one backend with no verification anywhere: no runner has
+      # Rscript by default, and neither does any development machine on this
+      # project, so its two live tests skip everywhere and it ships on faith.
+      # r-base-core is the minimal package that provides Rscript. Linux only —
+      # `brew install r` on the macOS leg costs several minutes for a backend
+      # whose only platform-specific surface (the sandbox wrapper) is already
+      # covered there by the Python tests.
+      - name: Install R so the R installer tests actually run
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get install --yes --no-install-recommends r-base-core
+          Rscript -e 'cat("Rscript", as.character(getRversion()), "\n")'
       # test/package/ carries the merge gate: a governed install under
       # network "allowlist", plus the assertion that the shell route to the
       # same install is refused. Both legs run it, so the gate is a fact on
