@@ -33,8 +33,10 @@ export namespace SystemPrompt {
    * intercepted by the skill tool, and skills cloned from GitHub are not this
    * repo's to edit. A block on every request reaches all of them.
    */
-  export async function packages(value?: unknown) {
-    return [await PackagePrompt.system(value)]
+  export async function packages(projectID?: string) {
+    // Defaults to the live project so the injection site stays a bare call;
+    // tests pass an explicit id (or omit it for the empty rendering).
+    return [await PackagePrompt.system(projectID ?? Instance.project.id)]
   }
 
   /** When the user message begins with `/<name>` matching an installed

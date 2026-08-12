@@ -3,7 +3,7 @@ import { PackagePrompt } from "../../src/package/prompt"
 import { SystemPrompt } from "../../src/session/system"
 
 test("packages() returns the capability block, shaped like compute()", async () => {
-  const block = await SystemPrompt.packages({ environments: [] })
+  const block = await SystemPrompt.packages("proj_empty_for_shape")
   expect(block).toHaveLength(1)
   expect(block[0]).toContain("<package-capability>")
   expect(block[0]).toContain("</package-capability>")
@@ -40,6 +40,86 @@ test("the contract promises refusal, not a missing network", () => {
   expect(rendered).toContain("refused")
   expect(rendered).toContain("virtualenv you create yourself")
 })
+
+test("the inventory reflects a real written environment", async () => {
+  const { Environment } = await import("../../src/package/environment")
+  const project = "proj_inventory"
+  await Environment.write(project, {
+    name: "torch",
+    language: "python",
+    requested: ["torch"],
+    installed: { torch: "2.4.0", filelock: "3.15.4" },
+    total: 2,
+    createdAt: 1,
+    updatedAt: 1,
+  })
+  const rendered = await PackagePrompt.system(project)
+  expect(rendered).toContain("torch (python): torch (+1 deps)")
+})
+
+test("a busy environment is reported from the live lock, not a stored flag", async () => {
+  const { Environment } = await import("../../src/package/environment")
+  const project = "proj_busy"
+  await Environment.write(project, {
+    name: "held",
+    language: "python",
+    requested: [],
+    installed: {},
+    total: 0,
+    createdAt: 1,
+    updatedAt: 1,
+  })
+  let rendered = ""
+  await Environment.lock(project, "held", async () => {
+    rendered = await PackagePrompt.system(project)
+  })
+  // A stored flag would survive a crash and permanently mark a healthy
+  // environment busy. The lock lives in memory and is the truth.
+  expect(rendered).toContain("INSTALL IN PROGRESS")
+  expect(await PackagePrompt.system(project)).not.toContain("INSTALL IN PROGRESS")
+})
+
+test("an unknown project renders the empty inventory rather than throwing", async () => {
+  expect(await PackagePrompt.system("proj_never_seen")).toContain("No environments exist yet")
+})
+
+test("after a real install, the agent's contract lists what it installed", async () => {
+  // The whole point of this task. Before it, `system()` read a global
+  // environments.json that nothing wrote, so the agent was told "No
+  // environments exist yet" forever — including immediately after installing
+  // something — which makes the contract's first rule ("answer whether a
+  // package is available from the inventory above") actively misleading.
+  const { Sandbox } = await import("../../src/sandbox/sandbox")
+  if (Sandbox.backend() === "none" || !Bun.which("python3")) return
+  const { Instance } = await import("../../src/project/instance")
+  const { PackageTool } = await import("../../src/tool/package")
+  const { executionSession, tmpdir } = await import("../fixture/fixture")
+  await using tmp = await tmpdir({ git: true })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const session = await executionSession()
+      const tool = await PackageTool.init()
+      const before = await PackagePrompt.system(Instance.project.id)
+      expect(before).toContain("No environments exist yet")
+
+      await tool.execute({ packages: ["tqdm"], environment: "seen", language: "python", source: false }, {
+        sessionID: session.id,
+        messageID: "",
+        callID: "",
+        agent: "research",
+        abort: AbortSignal.any([]),
+        messages: [],
+        metadata: () => {},
+        ask: async () => {},
+      } as never)
+
+      const after = await PackagePrompt.system(Instance.project.id)
+      expect(after).not.toContain("No environments exist yet")
+      expect(after).toContain("seen (python): tqdm")
+    },
+  })
+}, 600_000)
 
 test("the injection is unconditional, beside compute()", async () => {
   // The load-bearing mechanism is that this reaches EVERY request for EVERY

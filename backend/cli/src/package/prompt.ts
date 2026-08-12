@@ -1,7 +1,7 @@
-import path from "path"
 import z from "zod"
-import { Global } from "../global"
-import { JsonStore } from "../util/jsonstore"
+// Aliased: this namespace exports its own `Environment` (the render schema),
+// which would shadow the store inside every function body here.
+import { Environment as Store } from "./environment"
 
 /**
  * Capability contract for governed package installation.
@@ -47,8 +47,6 @@ export namespace PackagePrompt {
     })
     .passthrough()
 
-  const filepath = path.join(Global.Path.data, "environments.json")
-
   const inventory = (values: Environment[]) => {
     if (!values.length) {
       return ["No environments exist yet. The first install creates one; you do not create it separately."]
@@ -84,7 +82,32 @@ export namespace PackagePrompt {
     ].join("\n")
   }
 
-  export async function system(value?: unknown) {
-    return render(value ?? (await JsonStore.read(filepath)))
+  /**
+   * The inventory the agent sees, assembled from real manifests.
+   *
+   * `busy` is read from the live in-memory lock rather than stored on the
+   * manifest. A persisted flag would survive a crash and permanently mark a
+   * healthy environment as installing, with nothing to clear it; the lock
+   * cannot outlive the process that holds it.
+   *
+   * Takes a project id, not an opaque value — the earlier signature read a
+   * single global `environments.json` that nothing ever wrote, so the agent was
+   * told "No environments exist yet" forever, including immediately after
+   * installing something. That made the contract's first rule ("answer from the
+   * inventory above") a lie. Callers pass `undefined` only in tests that want
+   * the empty rendering.
+   */
+  export async function system(projectID?: string) {
+    if (!projectID) return render({ environments: [] })
+    const values = await Store.list(projectID)
+    return render({
+      environments: values.map((env) => ({
+        name: env.name,
+        language: env.language,
+        requested: env.requested,
+        total: env.total,
+        busy: Store.busy(projectID, env.name),
+      })),
+    })
   }
 }
