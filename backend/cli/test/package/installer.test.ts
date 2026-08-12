@@ -1,0 +1,208 @@
+import { expect, test } from "bun:test"
+import fs from "fs"
+import path from "path"
+import { Installer } from "../../src/package/installer"
+import { Sandbox } from "../../src/sandbox/sandbox"
+import { tmpdir } from "../fixture/fixture"
+
+const python = Bun.which("python3")
+
+test("probe prefers an existing environment directory over any tool", async () => {
+  await using dir = await tmpdir()
+  const env = path.join(dir.path, "env")
+  fs.mkdirSync(path.dirname(Installer.interpreter(env)), { recursive: true })
+  fs.writeFileSync(Installer.interpreter(env), "")
+  expect((await Installer.probe(env)).kind).toBe("existing")
+})
+
+test("probe picks uv over venv when both are available", async () => {
+  await using dir = await tmpdir()
+  // uv is the fast path when present; venv is the guarantee that it is never
+  // required.
+  const tool = await Installer.probe(path.join(dir.path, "nothing"), { uv: "/fake/uv", python: "/fake/python3" })
+  expect(tool).toEqual({ kind: "uv", binary: "/fake/uv" })
+})
+
+test("probe falls back to venv when uv is absent", async () => {
+  await using dir = await tmpdir()
+  const tool = await Installer.probe(path.join(dir.path, "nothing"), { uv: undefined, python: "/fake/python3" })
+  expect(tool).toEqual({ kind: "venv", binary: "/fake/python3" })
+})
+
+test("the remedy names both routes, and never offers to download one", async () => {
+  await using dir = await tmpdir()
+  // An opaque failure here reads as a broken machine — the exact symptom this
+  // whole design started from, where a missing pip, a severed network and a
+  // read-only site-packages all surfaced as one unreadable error.
+  const message = await Installer.probe(path.join(dir.path, "nothing"), { uv: undefined, python: undefined }).then(
+    () => "",
+    (error: Error) => error.message,
+  )
+  expect(message).toContain("python3-venv")
+  expect(message).toContain("uv")
+  expect(message).toContain("never downloads")
+})
+
+test.skipIf(!python)("creates a venv whose interpreter runs", async () => {
+  await using dir = await tmpdir()
+  const env = path.join(dir.path, "env")
+  await Installer.create(env, { kind: "venv", binary: python! })
+  const proc = Bun.spawn([Installer.interpreter(env), "--version"], { stdout: "pipe" })
+  expect(await new Response(proc.stdout).text()).toContain("Python 3")
+})
+
+test.skipIf(!python)("a fresh venv has pip even when the host python3 does not", async () => {
+  // Verified on Arch during design: python3 ships without pip there, and
+  // `python3 -m venv` still bootstraps pip from the bundled ensurepip wheel,
+  // offline. uv is a fast path, never a requirement.
+  await using dir = await tmpdir()
+  const env = path.join(dir.path, "env")
+  await Installer.create(env, { kind: "venv", binary: python! })
+  const proc = Bun.spawn([Installer.interpreter(env), "-m", "pip", "--version"], { stdout: "pipe", stderr: "pipe" })
+  await proc.exited
+  expect(proc.exitCode).toBe(0)
+})
+
+const uv = Bun.which("uv")
+
+test.skipIf(!uv)(
+  "an environment created by the uv branch has pip, because install() needs it",
+  async () => {
+    // Regression, and the reason `uv venv --seed` exists in create(). Plain
+    // `uv venv` does NOT bootstrap pip the way `python3 -m venv` does, while
+    // install() shells out to `python -m pip` regardless of who created the
+    // environment. Without the seed the uv branch produced an environment the
+    // installer could not use at all — "No module named pip" from a venv that
+    // looked perfectly healthy from outside the sandbox.
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "env")
+    await Installer.create(env, { kind: "uv", binary: uv! })
+    const proc = Bun.spawn([Installer.interpreter(env), "-m", "pip", "--version"], { stdout: "pipe", stderr: "pipe" })
+    await proc.exited
+    expect(proc.exitCode).toBe(0)
+  },
+  120_000,
+)
+
+test("whichever branch of the ladder creates it, the environment must expose pip", async () => {
+  // The invariant the bug violated, stated once so a future third branch has
+  // to satisfy it too rather than quietly repeating the same mistake.
+  const source = await Bun.file(new URL("../../src/package/installer.ts", import.meta.url).pathname).text()
+  expect(source.includes('"--seed"')).toBe(true)
+})
+
+test.skipIf(!python)("create on an existing environment is a no-op, not a rebuild", async () => {
+  await using dir = await tmpdir()
+  const env = path.join(dir.path, "env")
+  await Installer.create(env, { kind: "venv", binary: python! })
+  const marker = path.join(env, "marker")
+  fs.writeFileSync(marker, "keep me")
+  await Installer.create(env, await Installer.probe(env))
+  // Rebuilding would silently discard everything already installed.
+  expect(fs.existsSync(marker)).toBe(true)
+})
+
+test.skipIf(!python)("freeze reports name to version for what is installed", async () => {
+  await using dir = await tmpdir()
+  const env = path.join(dir.path, "env")
+  await Installer.create(env, { kind: "venv", binary: python! })
+  const frozen = await Installer.freeze(env)
+  expect(Object.values(frozen).every((v) => /^\d/.test(v))).toBe(true)
+})
+
+test.skipIf(!python)("freeze normalises names so they compare against parsed requirements", async () => {
+  await using dir = await tmpdir()
+  const env = path.join(dir.path, "env")
+  await Installer.create(env, { kind: "venv", binary: python! })
+  const frozen = await Installer.freeze(env)
+  // Environment.additive compares these keys against Requirement.parse output,
+  // so both sides must be PEP 503 normalised or an upgrade looks additive.
+  expect(Object.keys(frozen).every((k) => k === k.toLowerCase() && !k.includes("_"))).toBe(true)
+})
+
+test.skipIf(!python)("verify reports the version of a module that is present", async () => {
+  await using dir = await tmpdir()
+  const env = path.join(dir.path, "env")
+  await Installer.create(env, { kind: "venv", binary: python! })
+  expect((await Installer.verify(env, ["pip"]))["pip"]).toMatch(/^\d/)
+})
+
+test.skipIf(!python)("verify reports nothing for a module that is absent", async () => {
+  // Catches an installer that exits 0 without producing a working module.
+  await using dir = await tmpdir()
+  const env = path.join(dir.path, "env")
+  await Installer.create(env, { kind: "venv", binary: python! })
+  expect(
+    (await Installer.verify(env, ["definitely-not-a-real-module"]))["definitely-not-a-real-module"],
+  ).toBeUndefined()
+})
+
+// install() is the load-bearing function in this module and everything above
+// only exercises what surrounds it. Task 11 proves the whole path end to end;
+// these two prove the sandboxed argv composes and runs at all, here, where a
+// break is cheap to localise.
+const sandboxed = Sandbox.backend() !== "none" && Boolean(python)
+
+test.skipIf(!sandboxed)(
+  "a real install through the sandbox lands a real package",
+  async () => {
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "env")
+    await Installer.create(env, await Installer.probe(env))
+    const result = await Installer.install({ directory: env, packages: ["tqdm"], index: "", source: false })
+    expect(result.ok, result.log).toBe(true)
+    // Not "pip exited 0" — the version has to come back out of the environment.
+    expect((await Installer.verify(env, ["tqdm"]))["tqdm"]).toMatch(/^\d/)
+  },
+  300_000,
+)
+
+test.skipIf(!sandboxed)(
+  "a failed install reports ok:false and a log, and lands nothing",
+  async () => {
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "env")
+    await Installer.create(env, await Installer.probe(env))
+    const before = await Installer.freeze(env)
+    const result = await Installer.install({
+      directory: env,
+      packages: ["this-package-does-not-exist-anywhere-xyzzy"],
+      index: "",
+      source: false,
+    })
+    expect(result.ok).toBe(false)
+    expect(result.log.length).toBeGreaterThan(0)
+    // Modern pip builds every wheel before the install phase, so a failure
+    // aborts before anything is committed. There is no subset to keep.
+    expect(await Installer.freeze(env)).toEqual(before)
+  },
+  300_000,
+)
+
+test("explain translates the wheels-only rejection into what it means", () => {
+  const log = "ERROR: Could not find a version that satisfies the requirement foo (from versions: none)"
+  const message = Installer.explain(log)
+  // Reads as "no such package" but means "no wheel under this policy".
+  expect(message).toContain("No wheel")
+  expect(message).toContain("source")
+  expect(message).toContain("foo")
+})
+
+test("explain surfaces the cause of a build failure, not pip's summary line", () => {
+  const log = [
+    "      #include <Python.h>",
+    "               ^~~~~~~~~~",
+    "      fatal error: Python.h: No such file or directory",
+    "      compilation terminated.",
+    "  ERROR: Failed building wheel for cffi",
+  ].join("\n")
+  const message = Installer.explain(log)
+  // The summary names the package; the fatal error names the actual missing
+  // piece, which is what decides whether this is achievable in a sandbox.
+  expect(message).toContain("Python.h")
+  expect(message).toContain("cffi")
+})
+
+test("explain passes an unrecognised log through rather than inventing a diagnosis", () => {
+  expect(Installer.explain("ERROR: something nobody anticipated")).toContain("something nobody anticipated")
+})
