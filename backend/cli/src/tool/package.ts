@@ -134,13 +134,21 @@ export const PackageTool = Tool.define("package_install", {
       const running = Environment.lock(project, name, async () => {
         await Environment.claim(project, name, process.pid, KernelProcessIdentity.startToken(process.pid))
         try {
-          return await install()
-        } finally {
+          const value = await install()
           await Environment.release(project, name)
+          return value
+        } catch (error) {
+          // Recorded, not swallowed. Nothing is awaiting this promise, so a
+          // discarded rejection meant the agent was told "started installing"
+          // and could never learn otherwise: no manifest written, claim cleared,
+          // no trace anywhere. The failure now replaces the claim and surfaces
+          // in the environment inventory on the next request.
+          await Environment.fail(project, name, error instanceof Error ? error.message : String(error))
+          throw error
         }
       })
-      // Not awaited, but not unhandled either: an unobserved rejection here
-      // would surface as a process-level warning with no context.
+      // Already recorded above; this only stops an unobserved rejection
+      // surfacing as a process-level warning with no context.
       running.catch(() => undefined)
       return {
         title: `Installing · ${name}`,

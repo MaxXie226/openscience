@@ -229,3 +229,46 @@ test("a real install can be interrupted, and the environment is still usable aft
   expect(after.ok, after.log).toBe(true)
   expect((await Installer.verify(env, ["tqdm"]))["tqdm"]).toMatch(/^\d/)
 }, 600_000)
+
+test("a failed detached install is recorded, not swallowed", async () => {
+  // `wait: false` returns immediately and nothing awaits the promise, so a
+  // rejection used to be discarded outright: no manifest written, the claim
+  // released cleanly, no trace anywhere. The agent had been told "started
+  // installing" and could never learn otherwise.
+  const project = "proj_failed_detached"
+  await seed(project, "broken")
+  await Environment.fail(project, "broken", "No wheel is published for xyzzy under the current policy.")
+  const outcomes = await Environment.reconcile(project)
+  const found = outcomes.find((o) => o.name === "broken")
+  expect(found?.outcome).toBe("failed")
+  expect(found?.message).toContain("No wheel")
+  // Reported once, then cleared — a failure that repeated every request would
+  // be worse than one that vanished.
+  expect(await Environment.reconcile(project)).toEqual([])
+})
+
+test("an unresolved install reaches the agent's contract, not just a log", async () => {
+  // reconcile() had no production caller at all: built, tested, and reached
+  // only by its own tests. It now runs where the result can act — the
+  // capability block injected on every request.
+  const { PackagePrompt } = await import("../../src/package/prompt")
+  const project = "proj_warning_surfaces"
+  await seed(project, "halfdone")
+  await Environment.claim(project, "halfdone", 999_998, "definitely-gone")
+  const block = await PackagePrompt.system(project)
+  expect(block).toContain("UNRESOLVED INSTALLS")
+  expect(block).toContain("halfdone")
+  expect(block).toContain("outcome is unknown")
+  // Self-clearing: the next request is clean.
+  expect(await PackagePrompt.system(project)).not.toContain("UNRESOLVED INSTALLS")
+})
+
+test("a recorded failure is reported to the agent with its cause", async () => {
+  const { PackagePrompt } = await import("../../src/package/prompt")
+  const project = "proj_failure_surfaces"
+  await seed(project, "nowheel")
+  await Environment.fail(project, "nowheel", "No wheel is published for xyzzy.")
+  const block = await PackagePrompt.system(project)
+  expect(block).toContain("FAILED and nothing was landed")
+  expect(block).toContain("No wheel is published")
+})

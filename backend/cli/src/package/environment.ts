@@ -108,7 +108,14 @@ export namespace Environment {
    * Under `Global.Path.state`, not `data`: this is per-machine liveness, not
    * something to survive a restore onto another machine.
    */
-  const Claim = z.object({ pid: z.number().int(), token: z.string().optional(), startedAt: z.number() })
+  const Claim = z.object({
+    pid: z.number().int(),
+    token: z.string().optional(),
+    startedAt: z.number(),
+    /** Set when the install finished and FAILED. A claim carrying this is no
+     *  longer about liveness — the process is gone and we know why. */
+    error: z.string().optional(),
+  })
 
   export function claimPath(projectID: string, name: string) {
     return path.join(Global.Path.state, "envs", projectID, `${name}.claim.json`)
@@ -122,6 +129,21 @@ export namespace Environment {
 
   export async function release(projectID: string, name: string) {
     await fs.rm(claimPath(projectID, name), { force: true })
+  }
+
+  /**
+   * Record that a detached install failed.
+   *
+   * Without this a `wait: false` failure vanished: the error was caught and
+   * discarded, no manifest was written, the claim was released cleanly, and the
+   * agent had been told "started installing" with no way to ever learn
+   * otherwise. Replacing the claim rather than deleting it keeps one file as
+   * the single place an unfinished install is described, whatever became of it.
+   */
+  export async function fail(projectID: string, name: string, message: string) {
+    const file = claimPath(projectID, name)
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await Bun.write(file, JSON.stringify({ pid: process.pid, startedAt: Date.now(), error: message.slice(0, 2000) }))
   }
 
   /**
@@ -141,7 +163,7 @@ export namespace Environment {
     const { KernelProcessIdentity } = await import("../science/kernel/process")
     const dir = path.join(Global.Path.state, "envs", projectID)
     const names = await fs.readdir(dir).catch(() => [] as string[])
-    const out: { name: string; outcome: "running" | "unknown" }[] = []
+    const out: { name: string; outcome: "running" | "unknown" | "failed"; message?: string }[] = []
     for (const file of names.filter((n) => n.endsWith(".claim.json"))) {
       const name = file.slice(0, -".claim.json".length)
       const parsed = Claim.safeParse(
@@ -152,6 +174,13 @@ export namespace Environment {
       if (!parsed.success) {
         await fs.rm(path.join(dir, file), { force: true })
         out.push({ name, outcome: "unknown" })
+        continue
+      }
+      // A recorded failure is not a liveness question — the process is gone and
+      // the reason is known, so report it and clear it.
+      if (parsed.data.error) {
+        await fs.rm(path.join(dir, file), { force: true })
+        out.push({ name, outcome: "failed", message: parsed.data.error })
         continue
       }
       const alive = KernelProcessIdentity.running(parsed.data.pid, parsed.data.token)

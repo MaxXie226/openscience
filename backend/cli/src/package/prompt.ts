@@ -44,6 +44,8 @@ export namespace PackagePrompt {
   const Stored = z
     .object({
       environments: z.array(Environment).default([]),
+      /** Outcomes of installs that finished without anyone watching. */
+      warnings: z.array(z.string()).default([]),
     })
     .passthrough()
 
@@ -63,8 +65,16 @@ export namespace PackagePrompt {
     const parsed = Stored.safeParse(value)
     const envs = parsed.success ? parsed.data.environments : []
 
+    const warnings = parsed.success ? parsed.data.warnings : []
     return [
       "<package-capability>",
+      ...(warnings.length
+        ? [
+            "UNRESOLVED INSTALLS — tell the user about these before doing anything else:",
+            ...warnings.map((w) => `- ${w}`),
+            "",
+          ]
+        : []),
       "Environments available to kernels in this project:",
       ...inventory(envs),
       "",
@@ -99,6 +109,16 @@ export namespace PackagePrompt {
    */
   export async function system(projectID?: string) {
     if (!projectID) return render({ environments: [] })
+    // The only production caller of reconcile(), and the right one: this runs
+    // on every request, so the first request after a restart resolves any claim
+    // left by an install that never finished. Without a caller the whole
+    // claim/token mechanism was dead code — built, tested, and reached only by
+    // its own tests.
+    //
+    // Cheap enough to do here: a readdir of a directory that is empty except
+    // when an install is in flight or one ended badly, and it self-clears, so
+    // the next request finds nothing.
+    const outcomes = await Store.reconcile(projectID).catch(() => [])
     const values = await Store.list(projectID)
     return render({
       environments: values.map((env) => ({
@@ -108,6 +128,21 @@ export namespace PackagePrompt {
         total: env.total,
         busy: Store.busy(projectID, env.name),
       })),
+      // An environment that only ever existed as a failed install has no
+      // manifest, so warnings are carried separately rather than attached to
+      // the inventory rows — otherwise the one case worth reporting is the one
+      // case with nowhere to report it.
+      warnings: outcomes.flatMap((o) => {
+        if (o.outcome === "failed") {
+          return [`Install into ${o.name} FAILED and nothing was landed: ${o.message ?? "no detail recorded"}`]
+        }
+        if (o.outcome === "unknown") {
+          return [
+            `An install into ${o.name} was interrupted and its outcome is unknown. The environment may be incomplete — verify before relying on it, and re-install if in doubt.`,
+          ]
+        }
+        return []
+      }),
     })
   }
 }
