@@ -215,6 +215,15 @@ export namespace Sandbox {
       if (!bin) return "none"
       return probeBubblewrap(bin) ? "bubblewrap" : "none"
     }
+    if (process.platform === "win32") {
+      // Probed, never assumed. `AppContainer.usable()` loads the DLLs and
+      // derives a SID — side-effect free, and it catches the failure that
+      // matters: FFI bindings that do not resolve, which would mean composing a
+      // sandbox that is never actually applied. Anything it cannot prove falls
+      // back to "none", which is the behaviour Windows had before this existed.
+      const { AppContainer } = require("./appcontainer") as typeof import("./appcontainer")
+      return AppContainer.usable() ? "appcontainer" : "none"
+    }
     return "none"
   })
 

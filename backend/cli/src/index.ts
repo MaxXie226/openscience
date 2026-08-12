@@ -59,6 +59,27 @@ if (process.argv[2] === "__egress-shim") {
   await new Promise(() => {})
 }
 
+// Windows containment is applied AT process creation, not by a wrapper
+// executable, so the binary launches itself into the AppContainer and execs the
+// real command. Same placement and same reasoning as the shim above: a plain
+// argv check before yargs parses anything, so no command path has to stay in
+// sync, and none of the startup middleware runs inside a token that may not be
+// able to reach the network or the user profile.
+if (process.argv[2] === "__appcontainer-launch") {
+  const { AppContainer } = await import("./sandbox/appcontainer")
+  const rest = process.argv.slice(3)
+  const split = rest.indexOf("--")
+  if (split === -1) {
+    process.stderr.write("openscience: __appcontainer-launch requires <spec> -- <command>\n")
+    process.exit(2)
+  }
+  const code = await AppContainer.main(rest[0] as string, rest.slice(split + 1)).catch((error: Error) => {
+    process.stderr.write(`openscience: ${error.message}\n`)
+    return 1
+  })
+  process.exit(code)
+}
+
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
     e: e instanceof Error ? e.message : e,

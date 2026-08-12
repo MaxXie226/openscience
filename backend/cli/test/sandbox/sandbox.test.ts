@@ -1162,13 +1162,32 @@ describe("Sandbox on win32 (AppContainer composition)", () => {
     expect(() => Sandbox.appContainerArgs({ writable: ["/w"], network: "allow" }, ["cmd"])).toThrow("profile")
   })
 
-  test("a real Windows machine still reports no backend, until a launcher exists", async () => {
-    // Layer 1 builds the composition; nothing can yet apply it. Flipping the
-    // live probe before the launcher lands would make available() true and have
-    // the product claim a sandbox it cannot enforce — worse than today's honest
-    // refusal to run kernels on Windows.
+  test("the real Windows backend is probed, never assumed", async () => {
+    // This test previously asserted the probe never said "appcontainer" at all,
+    // which was correct while no launcher existed. Now one does, so the
+    // invariant moves rather than disappears: win32 must resolve through
+    // AppContainer.usable(), which loads the DLLs and derives a SID, and must
+    // fall back to "none" when that fails. Returning "appcontainer" because the
+    // platform says win32 is how a product ends up claiming a sandbox it never
+    // applies.
     const source = await Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname).text()
     const detected = source.slice(source.indexOf("const detected = lazy"), source.indexOf("export function backend"))
-    expect(detected.includes("appcontainer")).toBe(false)
+    expect(detected.includes("AppContainer.usable()")).toBe(true)
+    expect(detected.includes('AppContainer.usable() ? "appcontainer" : "none"')).toBe(true)
+  })
+
+  test("the capability probe is side-effect free and fails closed", async () => {
+    // It derives a SID rather than creating a profile, so a probe on a machine
+    // we end up not sandboxing leaves nothing behind; and every failure path
+    // returns false rather than throwing, because a probe that throws would
+    // take down callers that only wanted to know whether a backend exists.
+    const source = await Bun.file(new URL("../../src/sandbox/appcontainer.ts", import.meta.url).pathname).text()
+    const usable = source.slice(
+      source.indexOf("export function usable"),
+      source.indexOf("export function ensureProfile"),
+    )
+    expect(usable.includes("CreateAppContainerProfile")).toBe(false)
+    expect(usable.includes("catch")).toBe(true)
+    expect(usable.includes("return false")).toBe(true)
   })
 })
