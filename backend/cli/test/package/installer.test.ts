@@ -271,3 +271,31 @@ test("explain surfaces the cause of a build failure, not pip's summary line", ()
 test("explain passes an unrecognised log through rather than inventing a diagnosis", () => {
   expect(Installer.explain("ERROR: something nobody anticipated")).toContain("something nobody anticipated")
 })
+
+test.skipIf(!sandboxed)(
+  "install reports progress as pip works, not only at the end",
+  async () => {
+    // The defect this exists for: a pytorch install sat behind an unchanging
+    // ellipsis for 1m37s while pip reported phase and size the whole time,
+    // because the output was buffered and only read on completion.
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "env")
+    await Installer.create(env, await Installer.probe(env))
+    const seen: string[] = []
+    const result = await Installer.install({
+      directory: env,
+      packages: ["tqdm"],
+      index: "",
+      source: false,
+      onProgress: (s) => seen.push(s),
+    })
+    expect(result.ok, result.log).toBe(true)
+    expect(seen.length).toBeGreaterThan(0)
+    // Real pip phrasing, not a placeholder the tool invented.
+    expect(seen.join("\n")).toMatch(/Collecting|Downloading|Installing|Successfully/i)
+    // And the full log still survives for explain(), which needs lines that are
+    // rarely last.
+    expect(result.log.length).toBeGreaterThan(0)
+  },
+  300_000,
+)

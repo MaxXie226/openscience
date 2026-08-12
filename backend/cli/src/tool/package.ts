@@ -165,6 +165,18 @@ export const PackageTool = Tool.define("package_install", {
 
       const freeze = () => (r ? InstallerR.freeze(directory) : Installer.freeze(directory))
       const snapshot = await freeze()
+
+      // Report what pip is doing while it does it. A tool with no dedicated
+      // renderer otherwise shows its name and an ellipsis for the whole call —
+      // measured at 1m37s for a pytorch install, with pip reporting phase and
+      // size the entire time. `metadata` is re-read as the call runs, so this
+      // reaches the running row; `input` is fixed at call time and cannot.
+      const progress = (status: string) =>
+        ctx.metadata({
+          title: `Install · ${name}`,
+          metadata: { environment: name, packages: params.packages, progress: status },
+        })
+
       const result = r
         ? await InstallerR.install({ directory, packages: params.packages, signal: ctx.abort })
         : await Installer.install({
@@ -173,6 +185,7 @@ export const PackageTool = Tool.define("package_install", {
             index: "",
             source: params.source,
             signal: ctx.abort,
+            onProgress: progress,
           })
 
       // Modern pip builds every wheel before the install phase, so a build

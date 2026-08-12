@@ -137,12 +137,34 @@ export namespace Installer {
     })
   }
 
+  /**
+   * The most recent line of pip output worth showing a human.
+   *
+   * pip reports phase and size continuously — "Collecting torch", "Downloading
+   * torch-…whl (906.4 MB)", "Installing collected packages: …" — and all of it
+   * used to be buffered and discarded unless the install failed. A pytorch
+   * install sat behind an unchanging ellipsis for 1m37s while that ran.
+   *
+   * Progress-bar redraws and continuation lines are skipped: they are noise at
+   * one line of visible status, and a bar rendered to a pipe is mostly control
+   * characters anyway.
+   */
+  const progressLine = (chunk: string) => {
+    const lines = chunk
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l && !/^[━╸\-=|/\\ ]*$/.test(l) && !l.startsWith("|"))
+    return lines.at(-1)
+  }
+
   export async function install(input: {
     directory: string
     packages: string[]
     index: string
     source: boolean
     signal?: AbortSignal
+    /** Called with a short status as pip reports it. */
+    onProgress?: (status: string) => void
   }) {
     // Inside the environment directory, so it is covered by the one writable
     // bind. Without a writable cache pip disables caching entirely and every
@@ -170,7 +192,27 @@ export namespace Installer {
       stderr: "pipe",
       signal: input.signal,
     })
-    const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+    // Drained as it arrives rather than awaited whole, so a caller can report
+    // progress. The full text is still accumulated: `explain()` needs the
+    // entire log to find the `fatal error:` line, which is rarely last.
+    const drain = async (stream: ReadableStream<Uint8Array>, report: boolean) => {
+      const reader = stream.getReader()
+      const decoder = new TextDecoder()
+      let text = ""
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const piece = decoder.decode(value, { stream: true })
+        text += piece
+        if (!report || !input.onProgress) continue
+        const status = progressLine(piece)
+        if (status) input.onProgress(status)
+      }
+      return text
+    }
+    // pip writes its progress to stdout and its diagnostics to stderr; only the
+    // former is worth surfacing as status.
+    const [out, err] = await Promise.all([drain(proc.stdout, true), drain(proc.stderr, false)])
     await proc.exited
     return { ok: proc.exitCode === 0, log: [out, err].filter(Boolean).join("\n") }
   }
