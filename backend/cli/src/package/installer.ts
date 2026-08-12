@@ -96,8 +96,28 @@ export namespace Installer {
   export async function create(directory: string, tool: Tool) {
     if (tool.kind === "existing") return
     await fs.mkdir(path.dirname(directory), { recursive: true })
+    // `--system-site-packages` is not a convenience, it repairs a cliff.
+    //
+    // A kernel binds to the managed environment as soon as one exists, and
+    // falls back to the host interpreter while it does not. So without this,
+    // the FIRST install of anything silently removed every host package from
+    // every kernel in the project: install `tqdm`, lose `numpy`. Measured in
+    // real use — the notebook tool advertises numpy/pandas/scipy/matplotlib as
+    // pre-imported, and they vanished the moment an environment appeared.
+    //
+    // Inheriting is strictly a superset of the behaviour kernels had before
+    // managed environments existed, when they simply WERE the host
+    // interpreter, so it exposes nothing new: host site-packages was already
+    // readable under `--ro-bind / /`. The environment's own packages still take
+    // precedence, so installing a newer version shadows the host's.
+    //
+    // The cost is that the environment is not hermetic. A hermetic mode is a
+    // reasonable future flag; it is the wrong default for a tool whose users
+    // expect the scientific stack to be there.
     const argv =
-      tool.kind === "uv" ? [tool.binary, "venv", "--seed", directory] : [tool.binary, "-m", "venv", directory]
+      tool.kind === "uv"
+        ? [tool.binary, "venv", "--seed", "--system-site-packages", directory]
+        : [tool.binary, "-m", "venv", "--system-site-packages", directory]
     const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" })
     const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
     await proc.exited
@@ -158,7 +178,12 @@ export namespace Installer {
   /** name → version for everything resolved into the environment, names PEP 503
    *  normalised so they compare against parsed requirements. */
   export async function freeze(directory: string) {
-    const proc = Bun.spawn([interpreter(directory), "-m", "pip", "list", "--format=json"], {
+    // `--local` matters now that environments inherit system site-packages:
+    // without it this reports every host package too, which would make `total`
+    // meaningless, bury the requested names in the agent's inventory, and turn
+    // `additive()` into a comparison against the machine rather than against
+    // the environment. What this environment OWNS is the question being asked.
+    const proc = Bun.spawn([interpreter(directory), "-m", "pip", "list", "--local", "--format=json"], {
       stdout: "pipe",
       stderr: "pipe",
     })
@@ -175,20 +200,46 @@ export namespace Installer {
   }
 
   /**
-   * Report the landed version of each requested name.
+   * Report the version of each requested name **as the environment's own
+   * interpreter resolves it**, whether it lives in the environment or is
+   * inherited from the host.
    *
-   * Catches an installer that exits 0 without producing anything usable — "pip
-   * said ok" and "it is actually in the environment" are different claims, and
-   * only the second is worth reporting to a user.
+   * Asked of the interpreter rather than of `freeze()`, which lists only what
+   * the environment owns. Since environments inherit system site-packages, pip
+   * treats a host-provided package as already satisfied and installs nothing —
+   * so a `freeze`-based answer reported "(nothing reported)" for a request that
+   * is, from the user's seat, perfectly satisfied. The question worth answering
+   * is "can the kernel use it, and at what version", and only the interpreter
+   * can answer that.
+   *
+   * `importlib.metadata` rather than a real import: it reads distribution
+   * metadata, so it needs no heavy import, triggers no import side effects, and
+   * handles name normalisation itself. It still catches an installer that
+   * exited 0 without producing anything usable, which is the point.
    */
   export async function verify(directory: string, packages: string[]) {
-    const frozen = await freeze(directory)
-    const out: Record<string, string> = {}
-    for (const name of packages) {
-      const version = frozen[normalise(name)]
-      if (version) out[name] = version
+    const script = [
+      "import json, sys",
+      "from importlib.metadata import version, PackageNotFoundError",
+      "out = {}",
+      "for name in json.loads(sys.argv[1]):",
+      "    try:",
+      "        out[name] = version(name)",
+      "    except PackageNotFoundError:",
+      "        pass",
+      "print(json.dumps(out))",
+    ].join("\n")
+    const proc = Bun.spawn([interpreter(directory), "-c", script, JSON.stringify(packages)], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const text = await new Response(proc.stdout).text()
+    await proc.exited
+    try {
+      return JSON.parse(text) as Record<string, string>
+    } catch {
+      return {}
     }
-    return out
   }
 
   /**

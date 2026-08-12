@@ -84,6 +84,71 @@ test.skipIf(!uv)(
   120_000,
 )
 
+// The regression this pair exists for, measured in real use: a kernel binds to
+// the managed environment as soon as one exists and falls back to the host
+// interpreter while it does not, so the FIRST install of anything used to strip
+// every host package from every kernel in the project. Install tqdm, lose numpy
+// — while the notebook tool still advertised numpy as pre-imported.
+const hostHas = (name: string) => {
+  const proc = Bun.spawnSync([python ?? "python3", "-c", `import ${name}`], { stdout: "ignore", stderr: "ignore" })
+  return proc.exitCode === 0
+}
+
+test.skipIf(!python || !hostHas("numpy"))(
+  "a fresh environment can still import what the host interpreter had",
+  async () => {
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "env")
+    await Installer.create(env, { kind: "venv", binary: python! })
+    const proc = Bun.spawn([Installer.interpreter(env), "-c", "import numpy"], { stdout: "ignore", stderr: "pipe" })
+    const err = await new Response(proc.stderr).text()
+    await proc.exited
+    expect(proc.exitCode, err).toBe(0)
+  },
+  120_000,
+)
+
+test.skipIf(!python || !hostHas("numpy"))(
+  "verify reports an inherited package, because the kernel can genuinely use it",
+  async () => {
+    // freeze() lists only what the environment OWNS. Since environments inherit
+    // system site-packages, pip treats a host-provided package as already
+    // satisfied and installs nothing — so a freeze-based verify answered
+    // "(nothing reported)" for a request that is, from the user's seat,
+    // perfectly satisfied.
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "env")
+    await Installer.create(env, { kind: "venv", binary: python! })
+    expect(Object.keys(await Installer.freeze(env))).not.toContain("numpy")
+    expect((await Installer.verify(env, ["numpy"]))["numpy"]).toMatch(/^\d/)
+  },
+  120_000,
+)
+
+test.skipIf(!python)(
+  "verify still reports nothing for a package that is genuinely absent",
+  async () => {
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "env")
+    await Installer.create(env, { kind: "venv", binary: python! })
+    expect(await Installer.verify(env, ["definitely-not-a-real-distribution-xyzzy"])).toEqual({})
+  },
+  120_000,
+)
+
+test.skipIf(!python || !hostHas("numpy"))(
+  "freeze reports only what the environment owns, not the whole host",
+  async () => {
+    // Otherwise `total` is a fact about the machine, the agent's inventory is
+    // buried under host packages, and additive() compares against the wrong set.
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "env")
+    await Installer.create(env, { kind: "venv", binary: python! })
+    expect(Object.keys(await Installer.freeze(env))).not.toContain("numpy")
+  },
+  120_000,
+)
+
 test("whichever branch of the ladder creates it, the environment must expose pip", async () => {
   // The invariant the bug violated, stated once so a future third branch has
   // to satisfy it too rather than quietly repeating the same mistake.
