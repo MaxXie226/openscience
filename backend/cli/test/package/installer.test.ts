@@ -299,3 +299,36 @@ test.skipIf(!sandboxed)(
   },
   300_000,
 )
+
+test.skipIf(!sandboxed)(
+  "a second environment reuses the shared wheel cache instead of re-downloading",
+  async () => {
+    // The cache used to live inside the environment directory, so every new
+    // environment re-downloaded everything — measured at 34 MB and a full
+    // download for scipy alone, into an environment created seconds after one
+    // that already had it. The packages where this hurts are the large ones.
+    await using dir = await tmpdir()
+    const first = path.join(dir.path, "one")
+    const second = path.join(dir.path, "two")
+    await Installer.create(first, await Installer.probe(first))
+    await Installer.create(second, await Installer.probe(second))
+
+    const a = await Installer.install({ directory: first, packages: ["tqdm"], index: "", source: false })
+    expect(a.ok, a.log).toBe(true)
+
+    const seen: string[] = []
+    const b = await Installer.install({
+      directory: second,
+      packages: ["tqdm"],
+      index: "",
+      source: false,
+      onProgress: (s) => seen.push(s),
+    })
+    expect(b.ok, b.log).toBe(true)
+    // pip says so itself when it serves from cache rather than the network.
+    expect(b.log).toMatch(/cached|Using cached/i)
+    // And neither install put a cache inside the environment it populated.
+    expect(fs.existsSync(path.join(second, ".cache"))).toBe(false)
+  },
+  600_000,
+)

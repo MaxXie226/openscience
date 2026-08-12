@@ -1,6 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { Config } from "../config/config"
+import { Global } from "../global"
 import { EgressRuntime } from "../sandbox/egress-runtime"
 import { Sandbox } from "../sandbox/sandbox"
 
@@ -124,15 +125,34 @@ export namespace Installer {
     if (proc.exitCode !== 0) throw new Error(`Could not create the environment at ${directory}.\n${err || out}`)
   }
 
+  /**
+   * The wheel cache, shared by every environment on the machine.
+   *
+   * Deliberately NOT inside the environment directory, which is where it lived
+   * first. A per-environment cache means every new environment re-downloads
+   * everything: measured at 34 MB and a full download for scipy alone, in a
+   * second environment that had just been populated in the first — and the
+   * packages that make this hurt are the large ones, where it is hundreds of
+   * megabytes per environment.
+   *
+   * It is our own cache directory rather than user data, so sharing it across
+   * projects costs nothing in isolation terms. pip's cache is content-addressed
+   * and safe for concurrent readers and writers, which matters because the
+   * per-environment lock does not serialise installs into DIFFERENT
+   * environments.
+   */
+  const shared = () => path.join(Global.Path.cache, "pip")
+
   /** Sandboxed argv for a command run against the environment: the same policy
-   *  the kernel gets, plus write access to the environment directory. */
+   *  the kernel gets, plus write access to the environment directory and the
+   *  shared wheel cache. */
   async function confined(directory: string, argv: string[]) {
     const policy = await Config.trustedSandbox()
     const egress = await EgressRuntime.egressFor(policy)
     return Sandbox.wrapArgv({
       file: argv[0]!,
       args: argv.slice(1),
-      workspace: [directory],
+      workspace: [directory, shared()],
       options: { ...policy, egress },
     })
   }
@@ -166,11 +186,14 @@ export namespace Installer {
     /** Called with a short status as pip reports it. */
     onProgress?: (status: string) => void
   }) {
-    // Inside the environment directory, so it is covered by the one writable
-    // bind. Without a writable cache pip disables caching entirely and every
-    // retry re-downloads every wheel.
-    const cache = path.join(input.directory, ".cache")
+    // Two different directories with two different lifetimes. The wheel cache is
+    // shared across environments so a package is downloaded once per machine;
+    // the scratch directory pip unpacks into stays environment-local, because it
+    // is throwaway and sharing it would let concurrent installs collide.
+    const cache = shared()
+    const scratch = path.join(input.directory, ".tmp")
     await fs.mkdir(cache, { recursive: true })
+    await fs.mkdir(scratch, { recursive: true })
     // Wheels-only is a speed and reliability default, NOT a security boundary:
     // if bwrap contains agent Python at import time it contains setup.py at
     // install time.
@@ -187,7 +210,7 @@ export namespace Installer {
     ]
     const spec = await confined(input.directory, argv)
     const proc = Bun.spawn([spec.file, ...(spec.args ?? [])], {
-      env: { ...process.env, ...spec.env, PIP_CACHE_DIR: cache, TMPDIR: cache },
+      env: { ...process.env, ...spec.env, PIP_CACHE_DIR: cache, TMPDIR: scratch },
       stdout: "pipe",
       stderr: "pipe",
       signal: input.signal,
