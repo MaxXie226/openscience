@@ -66,7 +66,9 @@ jobs:
   sandbox:
     name: Sandbox (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Raised from 20: test/package/ now runs real pip installs through the
+    # sandbox against real pypi, which the sandbox suite alone never did.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -87,7 +89,11 @@ jobs:
             echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
           fi
           bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --die-with-parent -- true
-      - run: bun test test/sandbox/
+      # test/package/ carries the merge gate: a governed install under
+      # network "allowlist", plus the assertion that the shell route to the
+      # same install is refused. Both legs run it, so the gate is a fact on
+      # Linux and macOS rather than a claim about one of them.
+      - run: bun test test/sandbox/ test/package/
         shell: bash
         working-directory: backend/cli
 

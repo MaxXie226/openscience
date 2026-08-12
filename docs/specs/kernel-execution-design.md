@@ -379,7 +379,7 @@ The message is the interesting artefact. Decomposed:
 - **Honestly leaky interrupt** — `host.exec_interrupt(exec_id)` gives _"real termination for a
   path-venv; for a conda-backed environment the wait is abandoned — lock released, subprocess
   continues detached."_ It tells the agent that cancel does not always cancel.
-- **Per-environment lock, stated to the agent** — _"do NOT run python, r, or `manage\__` in that
+- **Per-environment lock, stated to the agent** — \_"do NOT run python, r, or `manage\__` in that
   environment until it finishes (its packages are being rewritten and **its kernel restarts on
   completion**). A different environment or bash is fine."\*
 
