@@ -1,6 +1,7 @@
 import z from "zod"
 import { Environment } from "../package/environment"
 import { Installer } from "../package/installer"
+import { InstallerR } from "../package/installer-r"
 import { Requirement } from "../package/requirement"
 import { Instance } from "../project/instance"
 import { KernelProcessIdentity } from "../science/kernel/process"
@@ -57,7 +58,16 @@ export const PackageTool = Tool.define("package_install", {
     // Parsed for its names only. Resolution happens after approval — the card
     // shows the request, so approving two names must not silently approve the
     // closure they pull in.
-    const parsed = params.packages.map((p) => Requirement.parse(p))
+    const language = params.language ?? "python"
+    // R package names are case-sensitive and `.` is meaningful (`data.table`),
+    // so the PEP 503 normalisation Requirement.parse applies is wrong for them:
+    // it would turn data.table into data-table and never match what CRAN
+    // installed. Python keeps the parser, which is what makes `numpy>=2.4` and
+    // `pandas[performance]` safe to accept.
+    const parsed =
+      language === "r"
+        ? params.packages.map((p) => ({ name: p.trim(), extras: [], specifier: "", marker: "", url: "" }))
+        : params.packages.map((p) => Requirement.parse(p))
 
     // Already satisfied: skip outright — no card, no install, no restart.
     // Nothing privileged happens, so nothing needs approving, and a
@@ -145,30 +155,37 @@ export const PackageTool = Tool.define("package_install", {
     return await Environment.lock(project, name, install)
 
     async function install() {
-      const tool = await Installer.probe(directory)
-      await Installer.create(directory, tool)
+      // Only the backend differs by language. The card, the lock, the manifest
+      // write and the additivity check are identical, because they are
+      // properties of the contract rather than of pip or CRAN.
+      const r = language === "r"
+      if (r) await InstallerR.create(directory)
+      const tool = r ? undefined : await Installer.probe(directory)
+      if (tool) await Installer.create(directory, tool)
 
-      const snapshot = await Installer.freeze(directory)
-      const result = await Installer.install({
-        directory,
-        packages: params.packages,
-        index: "",
-        source: params.source,
-        signal: ctx.abort,
-      })
+      const freeze = () => (r ? InstallerR.freeze(directory) : Installer.freeze(directory))
+      const snapshot = await freeze()
+      const result = r
+        ? await InstallerR.install({ directory, packages: params.packages, signal: ctx.abort })
+        : await Installer.install({
+            directory,
+            packages: params.packages,
+            index: "",
+            source: params.source,
+            signal: ctx.abort,
+          })
 
       // Modern pip builds every wheel before the install phase, so a build
       // failure aborts before anything is committed — verified during design,
       // where a failing package's cleanly-resolving dependency was downloaded
       // and still not installed. There is no subset to keep and nothing to
-      // retry, so this reports the cause and stops.
-      if (!result.ok) throw new Error(Installer.explain(result.log))
+      // retry, so this reports the cause and stops. R is checked explicitly by
+      // InstallerR, because install.packages() only warns and still exits 0.
+      if (!result.ok) throw new Error(r ? InstallerR.explain(result.log) : Installer.explain(result.log))
 
-      const after = await Installer.freeze(directory)
-      const versions = await Installer.verify(
-        directory,
-        parsed.map((p) => p.name),
-      )
+      const after = await freeze()
+      const names = parsed.map((p) => p.name)
+      const versions = r ? await InstallerR.verify(directory, names) : await Installer.verify(directory, names)
 
       const requested = Array.from(new Set([...(before?.requested ?? []), ...parsed.map((p) => p.name)]))
       await Environment.write(project, {
@@ -177,7 +194,7 @@ export const PackageTool = Tool.define("package_install", {
         // reachable without zod having applied parameter defaults, and an
         // undefined language used to produce a manifest that could never be
         // read back.
-        language: params.language ?? "python",
+        language,
         requested,
         installed: after,
         total: Object.keys(after).length,
