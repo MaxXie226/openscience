@@ -185,7 +185,7 @@ export namespace ComputeJobs {
       .object({
         requested: z.boolean(),
         enforced: z.boolean(),
-        backend: z.enum(["seatbelt", "bubblewrap", "none"]),
+        backend: z.enum(["seatbelt", "bubblewrap", "appcontainer", "none"]),
         // Persisted — widening this costs an older binary its ability to
         // read a newer record. `authority.sandbox.network` above is the same
         // enum persisted a second time; see ExecutionAuthority.Decision.

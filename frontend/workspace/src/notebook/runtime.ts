@@ -10,7 +10,7 @@ export type KernelEnvironment = {
   sandbox: {
     requested: boolean
     enforced: boolean
-    backend: "seatbelt" | "bubblewrap" | "none"
+    backend: "seatbelt" | "bubblewrap" | "appcontainer" | "none"
     network: "deny" | "allowlist" | "allow"
     platform: string
     available: boolean

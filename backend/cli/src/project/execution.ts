@@ -63,7 +63,7 @@ export namespace ExecutionAuthority {
       network: z.enum(["deny", "allowlist", "allow"]),
       allowWrite: z.array(z.string()),
       onUnavailable: z.enum(["warn", "error", "allow"]),
-      backend: z.enum(["seatbelt", "bubblewrap", "none"]),
+      backend: z.enum(["seatbelt", "bubblewrap", "appcontainer", "none"]),
       available: z.boolean(),
       enforced: z.boolean(),
     }),

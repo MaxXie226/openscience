@@ -489,7 +489,18 @@ describe("Sandbox.backend(platform)", () => {
   })
 
   test("an unsupported platform resolves to none", () => {
-    expect(Sandbox.backend("win32")).toBe("none")
+    // win32 is no longer one — it maps to appcontainer when injected. freebsd
+    // has no backend and is not planned to get one, so it still exercises the
+    // fallthrough this test exists for.
+    expect(Sandbox.backend("freebsd")).toBe("none")
+  })
+
+  test("an injected win32 resolves to appcontainer, so the Windows paths are reachable", () => {
+    // The same seam that let the seatbelt paths be built from Linux. It is
+    // deliberately NOT the live probe: `detected()` still answers "none" on a
+    // real Windows machine until a launcher exists, because claiming a sandbox
+    // the product cannot apply is worse than refusing to run kernels there.
+    expect(Sandbox.backend("win32")).toBe("appcontainer")
   })
 
   // The doc comment's exact claim: an explicit platform that matches the
@@ -1073,4 +1084,91 @@ describe("Sandbox.wrapArgv egress shim", () => {
     },
     15000,
   )
+})
+
+describe("Sandbox on win32 (AppContainer composition)", () => {
+  const base = {
+    file: "python3",
+    args: ["-u", "/w/k.py"],
+    workspace: ["/w/project"],
+    platform: "win32" as const,
+  }
+  const decode = (args: string[]) =>
+    JSON.parse(Buffer.from(args[args.indexOf("__appcontainer-launch") + 1]!, "base64").toString("utf8"))
+
+  test("the profile name is stable for a workspace and distinct between workspaces", () => {
+    // The package SID is derived from this name, and filesystem ACEs plus the
+    // broker pipe's DACL refer to that SID. A fresh name per launch would
+    // strand every ACE the previous one granted; a shared name across projects
+    // would let one read another's granted paths.
+    expect(Sandbox.appContainerProfile(["/w/project"])).toBe(Sandbox.appContainerProfile(["/w/project"]))
+    expect(Sandbox.appContainerProfile(["/w/a"])).not.toBe(Sandbox.appContainerProfile(["/w/b"]))
+  })
+
+  test("the profile name is a legal AppContainer name", () => {
+    // Windows limits both length and character set, and a workspace path
+    // carries separators, drive letters and spaces that are not valid in one.
+    const name = Sandbox.appContainerProfile(["C:\\Users\\me\\My Project (v2)"])
+    expect(name).toMatch(/^[A-Za-z0-9.-]{1,64}$/)
+  })
+
+  test("wrapArgv launches the binary as its own container launcher", () => {
+    // There is no wrapper executable on Windows: confinement is applied AT
+    // CreateProcess through SECURITY_CAPABILITIES, which cannot be expressed as
+    // an argv. The binary becomes the launcher, exactly as __egress-shim does.
+    const w = Sandbox.wrapArgv({ ...base, options: { enabled: true, network: "allow" } })
+    expect(w.sandboxed).toBe(true)
+    expect(w.backend).toBe("appcontainer")
+    expect(w.file).toBe(process.execPath)
+    expect(w.args[0]).toBe("__appcontainer-launch")
+  })
+
+  test("the real argv survives at the tail, after a --", () => {
+    const w = Sandbox.wrapArgv({ ...base, options: { enabled: true, network: "allow" } })
+    expect(w.args.slice(-3)).toEqual(["python3", "-u", "/w/k.py"])
+    expect(w.args[w.args.length - 4]).toBe("--")
+  })
+
+  test("the policy travels as one base64 blob, not as flags", () => {
+    // Windows re-parses command lines with CommandLineToArgvW rules that differ
+    // from every shell, and paths there routinely carry spaces, quotes and
+    // backslashes. A blob with no shell-significant characters cannot be mangled.
+    const w = Sandbox.wrapArgv({ ...base, options: { enabled: true, network: "allow" } })
+    const blob = w.args[1]!
+    expect(blob).toMatch(/^[A-Za-z0-9+/=]+$/)
+    const spec = decode(w.args)
+    expect(spec.profile).toBe(Sandbox.appContainerProfile(["/w/project"]))
+    expect(spec.writable).toContain("/w/project")
+    expect(spec.network).toBe("allow")
+  })
+
+  test("allowlist carries the broker pipe; deny and allow carry none", () => {
+    const withPipe = Sandbox.wrapArgv({
+      ...base,
+      options: { enabled: true, network: "allowlist", egress: "openscience-broker-abc" },
+    })
+    expect(decode(withPipe.args).pipe).toBe("openscience-broker-abc")
+
+    for (const network of ["deny", "allow"] as const) {
+      const w = Sandbox.wrapArgv({ ...base, options: { enabled: true, network } })
+      expect(decode(w.args).pipe).toBeUndefined()
+    }
+  })
+
+  test("composing without a profile throws rather than launching unconfined", () => {
+    // Fail closed, the same rule bubblewrapArgs applies to a missing egress
+    // socket: a launch with no profile has no package SID, so nothing is
+    // contained and every ACE and DACL downstream refers to nothing.
+    expect(() => Sandbox.appContainerArgs({ writable: ["/w"], network: "allow" }, ["cmd"])).toThrow("profile")
+  })
+
+  test("a real Windows machine still reports no backend, until a launcher exists", async () => {
+    // Layer 1 builds the composition; nothing can yet apply it. Flipping the
+    // live probe before the launcher lands would make available() true and have
+    // the product claim a sandbox it cannot enforce — worse than today's honest
+    // refusal to run kernels on Windows.
+    const source = await Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname).text()
+    const detected = source.slice(source.indexOf("const detected = lazy"), source.indexOf("export function backend"))
+    expect(detected.includes("appcontainer")).toBe(false)
+  })
 })

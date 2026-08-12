@@ -24,7 +24,7 @@ interface SandboxConfig {
 }
 interface Status {
   platform: string
-  backend: "seatbelt" | "bubblewrap" | "none"
+  backend: "seatbelt" | "bubblewrap" | "appcontainer" | "none"
   available: boolean
   tool?: string
   reason?: string

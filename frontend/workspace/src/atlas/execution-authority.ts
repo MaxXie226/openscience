@@ -30,7 +30,7 @@ export interface ExecutionDecision {
     network: "deny" | "allowlist" | "allow"
     allowWrite: string[]
     onUnavailable: "warn" | "error" | "allow"
-    backend: "seatbelt" | "bubblewrap" | "none"
+    backend: "seatbelt" | "bubblewrap" | "appcontainer" | "none"
     available: boolean
     enforced: boolean
   }

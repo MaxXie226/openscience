@@ -36,7 +36,7 @@ const log = Log.create({ service: "sandbox" })
  * exfiltration.
  */
 export namespace Sandbox {
-  export type Backend = "seatbelt" | "bubblewrap" | "none"
+  export type Backend = "seatbelt" | "bubblewrap" | "appcontainer" | "none"
 
   export interface Policy {
     /** Absolute paths the sandboxed process may write to. */
@@ -71,6 +71,17 @@ export namespace Sandbox {
      * end. Set together with `port` or not at all (see `buildPolicy`).
      */
     secret?: string
+    /**
+     * AppContainer profile name on Windows. Containment there is anchored to a
+     * package SID rather than a namespace or a profile document: the SID is
+     * derived from this name, filesystem ACEs are granted to it, and the broker
+     * pipe's DACL names it. Required when the backend is "appcontainer".
+     *
+     * Derived from the workspace rather than passed in, so the same project
+     * gets the same SID across runs — ACLs granted once stay meaningful, and
+     * `CreateAppContainerProfile` is idempotent given a stable name.
+     */
+    profile?: string
     /**
      * Read-only paths to bind into the namespace after `--tmpfs /tmp`, so
      * they stay reachable regardless of where they happen to live on the
@@ -230,6 +241,16 @@ export namespace Sandbox {
     if (platform === process.platform) return detected()
     if (platform === "darwin") return "seatbelt"
     if (platform === "linux") return "bubblewrap"
+    // An INJECTED win32 resolves to "appcontainer" so the Windows composition
+    // can be built and tested from a machine that is not Windows, exactly as
+    // the seatbelt paths were built from Linux.
+    //
+    // `detected()` above deliberately still answers "none" on a real Windows
+    // machine, and must keep doing so until the launcher exists. Flipping the
+    // live probe first would make `available()` true and have the product claim
+    // a sandbox it cannot actually apply — strictly worse than today's honest
+    // refusal to run kernels there.
+    if (platform === "win32") return "appcontainer"
     return "none"
   }
 
@@ -403,6 +424,23 @@ export namespace Sandbox {
     // dedupe() applies the same path.resolve() normalization used for
     // writable/unreadable above, so a trailing slash, a double slash, or an
     // unresolved ".." can't slip an over-broad path past tooBroadToConfine's
+    // AppContainer's egress is a named pipe, identified by a NAME rather than a
+    // filesystem path (`\\.\pipe\<name>` is a namespace of its own, not a
+    // directory). It must skip the path machinery below for exactly the reason
+    // seatbelt's port:secret does: `dedupe`'s `path.resolve` would silently
+    // rewrite `openscience-broker-abc` into an absolute path under the current
+    // directory, and the launcher would then ask for a pipe nobody serves.
+    if (input.backend === "appcontainer") {
+      const pipe = input.options.egress?.trim()
+      return {
+        writable,
+        unreadable,
+        network,
+        profile: appContainerProfile(input.workspace),
+        ...(pipe ? { egress: pipe } : {}),
+      }
+    }
+
     // string checks — the two normalization paths cannot drift apart because
     // this is the exact same helper, not a parallel implementation of it.
     const [egress] = dedupe(input.options.egress ? [input.options.egress] : [])
@@ -624,12 +662,64 @@ export namespace Sandbox {
    * resolved it (via a possibly-injected `platform`), and re-deriving it
    * from ambient state would silently disagree with that resolution.
    */
+  /**
+   * A stable AppContainer profile name for a workspace.
+   *
+   * Windows anchors containment to a package SID derived from this name, and
+   * the SID is what filesystem ACEs and the broker pipe's DACL refer to. So the
+   * name has to be stable across runs — a fresh name per launch would strand
+   * every ACE granted by the previous one — and distinct per project, so two
+   * projects cannot read each other's granted paths.
+   *
+   * Derived from the first workspace root rather than passed in, because the
+   * project id is not available this deep and the workspace already identifies
+   * the project uniquely. Hashed rather than embedded: a profile name is
+   * limited in length and character set, and a path contains separators, drive
+   * letters and spaces that are not valid in one.
+   */
+  export function appContainerProfile(workspace: string[]): string {
+    const root = dedupe(workspace)[0] ?? "default"
+    return `openscience-${createHash("sha256").update(root).digest("hex").slice(0, 16)}`
+  }
+
+  /**
+   * Argv that launches `argv` inside an AppContainer.
+   *
+   * Unlike bubblewrap and seatbelt there is no wrapper executable to exec:
+   * AppContainer confinement is applied AT process creation, through
+   * `SECURITY_CAPABILITIES` attributes passed to `CreateProcess`. That cannot be
+   * expressed as an argv, so the binary becomes its own launcher — exactly the
+   * pattern `__egress-shim` already uses at `index.ts:54`, and for the same
+   * reason: it needs no additional shipped artifact per architecture.
+   *
+   * The policy travels as one base64 blob rather than as flags. Windows command
+   * lines are re-parsed by `CommandLineToArgvW` with quoting rules that differ
+   * from every shell, and paths with spaces, quotes and backslashes are the norm
+   * there; a blob with no shell-significant characters cannot be mangled by
+   * them. The real argv still follows a `--` so the tail stays readable and
+   * matches the contract the other two backends keep.
+   */
+  export function appContainerArgs(policy: Policy, argv: string[]): string[] {
+    if (!policy.profile) throw new Error("sandbox backend 'appcontainer' requires a profile name")
+    const spec = {
+      profile: policy.profile,
+      writable: policy.writable,
+      unreadable: policy.unreadable ?? [],
+      network: policy.network,
+      ...(policy.egress ? { pipe: policy.egress } : {}),
+    }
+    return ["__appcontainer-launch", Buffer.from(JSON.stringify(spec), "utf8").toString("base64"), "--", ...argv]
+  }
+
   function specForArgv(argv: string[], policy: Policy, b: Backend): Spec | null {
     switch (b) {
       case "seatbelt":
         return { file: "sandbox-exec", args: ["-p", seatbeltProfile(policy), ...argv] }
       case "bubblewrap":
         return { file: "bwrap", args: [...bubblewrapArgs(policy), "--", ...argv] }
+      case "appcontainer":
+        // The binary launches itself into the container; see appContainerArgs.
+        return { file: process.execPath, args: appContainerArgs(policy, argv) }
       default:
         return null
     }
