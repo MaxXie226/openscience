@@ -50,6 +50,29 @@ export namespace Installer {
   }
 
   /**
+   * An interpreter on PATH that actually runs.
+   *
+   * `Bun.which` alone is not enough, and Windows is where that bites. A default
+   * install has `python3.exe` and `python.exe` in `WindowsApps` as App
+   * Execution Aliases: zero-byte reparse points that open the Microsoft Store
+   * instead of an interpreter. `which` finds them, `python3 -m venv <dir>`
+   * appears to do something, and the environment is then created without an
+   * interpreter inside it. Measured on a real Windows machine: every install
+   * failed with `Executable not found in $PATH` naming
+   * `...\envs\<project>\default\Scripts\python.exe`, with nothing
+   * explaining why the environment was empty.
+   *
+   * `findPython` in the notebook tool has always verified with `--version`;
+   * this path had drifted from it. Same check, same reason.
+   */
+  const which = (name: string) => {
+    const found = Bun.which(name)
+    if (!found) return undefined
+    const proc = Bun.spawnSync([found, "--version"], { stdout: "ignore", stderr: "ignore" })
+    return proc.exitCode === 0 ? found : undefined
+  }
+
+  /**
    * The ladder, in order: an existing environment wins over any tool, then uv,
    * then venv, then a remedy.
    *
@@ -65,7 +88,7 @@ export namespace Installer {
     const uv = available ? available.uv : (Bun.which("uv") ?? undefined)
     if (uv) return { kind: "uv", binary: uv }
 
-    const python = available ? available.python : (Bun.which("python3") ?? Bun.which("python") ?? undefined)
+    const python = available ? available.python : (which("python3") ?? which("python"))
     if (python) return { kind: "venv", binary: python }
 
     throw new Error(
@@ -123,6 +146,24 @@ export namespace Installer {
     const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
     await proc.exited
     if (proc.exitCode !== 0) throw new Error(`Could not create the environment at ${directory}.\n${err || out}`)
+    // Exit code 0 is not proof. A Windows App Execution Alias standing in for
+    // python exits cleanly having created nothing, and the failure then
+    // surfaced much later as "Executable not found in $PATH" from the install
+    // step, naming a path with no hint as to why it was missing. Assert the
+    // thing the rest of this module depends on, at the moment it should exist.
+    if (!(await Bun.file(interpreter(directory)).exists())) {
+      throw new Error(
+        [
+          `Creating the environment at ${directory} reported success but produced no interpreter at ${interpreter(directory)}.`,
+          process.platform === "win32"
+            ? "On Windows this usually means PATH resolves python to a Microsoft Store App Execution Alias rather than a real interpreter. Install Python from python.org, or turn the alias off under Settings > Apps > Advanced app settings > App execution aliases."
+            : "Install a working python3 with the venv module, or install uv.",
+          (err || out).trim(),
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      )
+    }
   }
 
   /**

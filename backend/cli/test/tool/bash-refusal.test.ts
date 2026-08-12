@@ -135,3 +135,29 @@ test("the real bash tool still runs an ordinary command", async () => {
     },
   })
 })
+
+test("sandbox status never claims confinement on a machine with no backend", async () => {
+  // Observed on Windows: "status enabled (agent shell commands are confined to
+  // the workspace)" printed on a machine where Sandbox.backend() is "none" and
+  // nothing confines anything. A false statement about a security property is
+  // the worst thing this command can print, so the sentence now keys off
+  // whether a backend EXISTS, not merely off the config being on.
+  const source = await Bun.file(new URL("../../src/cli/cmd/sandbox.ts", import.meta.url).pathname).text()
+  expect(source.includes("are NOT confined here: no backend on this platform")).toBe(true)
+  // Three states, not two — the ternary must consider availability.
+  expect(source.includes("d.available")).toBe(true)
+})
+
+test("nothing printed on a backend-less machine carries non-ASCII", async () => {
+  // A Windows console decodes our UTF-8 as its OEM code page. An em dash in the
+  // "unavailable" line arrived as mojibake in a real run. Everything reachable
+  // WITHOUT a backend — which is exactly the Windows path — stays ASCII.
+  const source = await Bun.file(new URL("../../src/cli/cmd/sandbox.ts", import.meta.url).pathname).text()
+  const printed = source
+    .split("\n")
+    .filter((l) => l.includes("UI.println") || l.includes("TEXT_WARNING") || l.includes("TEXT_DANGER"))
+    .filter((l) => !l.includes("c.skipped") && !l.trimStart().startsWith("//"))
+    .join("\n")
+  // eslint-disable-next-line no-control-regex
+  expect(printed).not.toMatch(/[^\x00-\x7F]/)
+})

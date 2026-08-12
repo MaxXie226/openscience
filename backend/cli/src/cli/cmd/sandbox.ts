@@ -17,16 +17,27 @@ function printStatus(config?: Config.Sandbox) {
   const enabled = config?.enabled === true
 
   UI.println(`${S.TEXT_NORMAL_BOLD}Execution sandbox${S.TEXT_NORMAL}`)
+  // Three states, not two. "enabled" describes the CONFIG; whether anything is
+  // actually confined depends on a backend existing. Keying the sentence off
+  // `enabled` alone told a Windows user "agent shell commands are confined to
+  // the workspace" on a machine where `Sandbox.backend()` is "none" and nothing
+  // confines anything — a false statement about a security property, which is
+  // the worst kind of wrong thing for this command to print.
+  const effect = !enabled
+    ? "run with full user authority"
+    : d.available
+      ? "are confined to the workspace"
+      : "are NOT confined here: no backend on this platform"
   UI.println(
     `  status    ${enabled ? `${S.TEXT_SUCCESS_BOLD}enabled` : `${S.TEXT_DIM}disabled`}${S.TEXT_NORMAL}` +
-      `${S.TEXT_DIM}  (agent shell commands${enabled ? " are confined to the workspace" : " run with full user authority"})${S.TEXT_NORMAL}`,
+      `${S.TEXT_DIM}  (agent shell commands ${effect})${S.TEXT_NORMAL}`,
   )
   UI.println(`  platform  ${d.platform}`)
   UI.println(
     `  backend   ${
       d.available
         ? `${S.TEXT_SUCCESS}${d.backend}${S.TEXT_NORMAL} ${S.TEXT_DIM}(${d.tool})${S.TEXT_NORMAL}`
-        : `${S.TEXT_WARNING}unavailable${S.TEXT_NORMAL} ${S.TEXT_DIM}— ${d.reason}${S.TEXT_NORMAL}`
+        : `${S.TEXT_WARNING}unavailable${S.TEXT_NORMAL} ${S.TEXT_DIM}- ${d.reason}${S.TEXT_NORMAL}`
     }`,
   )
   if (enabled) {
@@ -38,7 +49,7 @@ function printStatus(config?: Config.Sandbox) {
   if (enabled && !d.available) {
     UI.println("")
     UI.println(
-      `  ${S.TEXT_WARNING_BOLD}Note:${S.TEXT_NORMAL} sandbox is on but no backend exists here — ` +
+      `  ${S.TEXT_WARNING_BOLD}Note:${S.TEXT_NORMAL} sandbox is on but no backend exists here - ` +
         `commands run per "${config?.onUnavailable ?? "error"}". It takes effect on machines with a backend.`,
     )
   }
@@ -133,7 +144,7 @@ const TestCommand = cmd({
     const result = await Sandbox.selfTest()
     if (!result.available) {
       const d = Sandbox.describe()
-      UI.println(`${S.TEXT_WARNING}No sandbox backend available${S.TEXT_NORMAL} — ${d.reason}.`)
+      UI.println(`${S.TEXT_WARNING}No sandbox backend available${S.TEXT_NORMAL} - ${d.reason}.`)
       UI.println(`${S.TEXT_DIM}Nothing to test here.${S.TEXT_NORMAL}`)
       return
     }
@@ -141,6 +152,11 @@ const TestCommand = cmd({
       `${S.TEXT_NORMAL_BOLD}Sandbox self-test${S.TEXT_NORMAL} ${S.TEXT_DIM}(${result.backend})${S.TEXT_NORMAL}`,
     )
     for (const c of result.checks) {
+      // The glyphs below are only reachable when a backend EXISTS, so they
+      // cannot print on Windows today, where the command exits above. Anything
+      // printed on a backend-less machine must stay ASCII: a Windows console
+      // decodes our UTF-8 as its OEM code page, and an em dash arrived as
+      // "\u0393\u00c7\u00f6" in a real run. Keep that rule if a Windows backend lands.
       const mark = c.skipped ? `${S.TEXT_DIM}– skip` : c.pass ? `${S.TEXT_SUCCESS}✓ pass` : `${S.TEXT_DANGER}✗ FAIL`
       UI.println(`  ${mark}${S.TEXT_NORMAL}  ${c.name}${c.detail ? ` ${S.TEXT_DIM}(${c.detail})${S.TEXT_NORMAL}` : ""}`)
     }
@@ -148,7 +164,7 @@ const TestCommand = cmd({
     UI.println(
       result.ok
         ? `${S.TEXT_SUCCESS_BOLD}Containment verified.${S.TEXT_NORMAL}`
-        : `${S.TEXT_DANGER_BOLD}Containment FAILED — do not rely on the sandbox until this passes.${S.TEXT_NORMAL}`,
+        : `${S.TEXT_DANGER_BOLD}Containment FAILED - do not rely on the sandbox until this passes.${S.TEXT_NORMAL}`,
     )
   },
 })
