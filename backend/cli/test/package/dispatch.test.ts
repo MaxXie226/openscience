@@ -156,3 +156,76 @@ test.skipIf(!live)(
   },
   600_000,
 )
+
+test("a claim survives a hard kill of its process and reconciles as unknown", async () => {
+  // The scenario the claim/token machinery exists for, which nothing exercised:
+  // the CLI is killed while an install runs, and on restart a claim file points
+  // at a pid that is gone. Every other test here uses a process that exited
+  // normally, or a synthetic pid. This one kills a live process outright and
+  // watches the SAME claim flip from running to unknown.
+  const project = "proj_reconcile_killed"
+  await seed(project, "killed")
+
+  const proc = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 60_000)"], {
+    stdout: "ignore",
+    stderr: "ignore",
+  })
+  const pid = proc.pid
+  await Environment.claim(project, "killed", pid, KernelProcessIdentity.startToken(pid))
+
+  // Alive: the claim is true right now, so reconcile must leave it alone.
+  const before = await Environment.reconcile(project)
+  expect(before.find((o) => o.name === "killed")?.outcome).toBe("running")
+
+  proc.kill("SIGKILL")
+  await proc.exited
+  for (let i = 0; i < 100; i++) {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      break
+    }
+    await Bun.sleep(20)
+  }
+  expect(() => process.kill(pid, 0)).toThrow()
+
+  // Dead: pip has no transactions, so an interrupted install may have left a
+  // partial tree. "unknown" is the only honest answer; "fine" would turn into a
+  // mystery ImportError several turns later.
+  const after = await Environment.reconcile(project)
+  expect(after.find((o) => o.name === "killed")?.outcome).toBe("unknown")
+  // And it is cleared, so a later boot does not re-report a resolved claim.
+  expect(await Environment.reconcile(project)).toEqual([])
+}, 60_000)
+
+test("a real install can be interrupted, and the environment is still usable after", async () => {
+  // The other half: after an abort, the environment must not be wedged. A
+  // half-written tree that no later install can repair would be worse than the
+  // interruption itself.
+  const { Sandbox } = await import("../../src/sandbox/sandbox")
+  const python = Bun.which("python3")
+  if (Sandbox.backend() === "none" || !python) return
+  const { Installer } = await import("../../src/package/installer")
+  const { tmpdir } = await import("../fixture/fixture")
+
+  await using dir = await tmpdir()
+  const env = (await import("path")).join(dir.path, "env")
+  await Installer.create(env, await Installer.probe(env))
+
+  const control = new AbortController()
+  const running = Installer.install({
+    directory: env,
+    packages: ["scipy"],
+    index: "",
+    source: false,
+    signal: control.signal,
+  })
+  await Bun.sleep(600)
+  control.abort()
+  await running.catch(() => undefined)
+
+  // The environment survives: a subsequent install into it works.
+  const after = await Installer.install({ directory: env, packages: ["tqdm"], index: "", source: false })
+  expect(after.ok, after.log).toBe(true)
+  expect((await Installer.verify(env, ["tqdm"]))["tqdm"]).toMatch(/^\d/)
+}, 600_000)

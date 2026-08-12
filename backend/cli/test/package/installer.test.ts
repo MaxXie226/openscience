@@ -332,3 +332,54 @@ test.skipIf(!sandboxed)(
   },
   600_000,
 )
+
+// `source: true` had never been exercised anywhere — not in tests, not in the
+// product — while explain() actively tells users "Retry with source builds
+// enabled if a compiler and headers are available". A user following our own
+// error message would have been the first to run this path.
+//
+// sgmllib3k is published as an sdist with no wheel, so it is refused under the
+// default wheels-only policy and installs only when source builds are allowed.
+// That makes the flag's effect observable rather than asserted from argv.
+test.skipIf(!sandboxed)(
+  "wheels-only refuses an sdist-only package, and says what it really means",
+  async () => {
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "env")
+    await Installer.create(env, await Installer.probe(env))
+    const result = await Installer.install({
+      directory: env,
+      packages: ["sgmllib3k"],
+      index: "",
+      source: false,
+    })
+    expect(result.ok).toBe(false)
+    // The raw log reads as "no such package"; the translation has to say the
+    // truth, which is that a wheel is missing and source builds are the answer.
+    const message = Installer.explain(result.log)
+    expect(message).toContain("No wheel")
+    expect(message).toContain("source")
+    expect(await Installer.verify(env, ["sgmllib3k"])).toEqual({})
+  },
+  600_000,
+)
+
+test.skipIf(!sandboxed)(
+  "the same package installs when source builds are allowed",
+  async () => {
+    // The escalation explain() advertises, actually performed: a real sdist
+    // built inside the sandbox, through the allowlist proxy.
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "env")
+    await Installer.create(env, await Installer.probe(env))
+    const result = await Installer.install({
+      directory: env,
+      packages: ["sgmllib3k"],
+      index: "",
+      source: true,
+    })
+    expect(result.ok, result.log).toBe(true)
+    expect((await Installer.verify(env, ["sgmllib3k"]))["sgmllib3k"]).toMatch(/^\d/)
+  },
+  600_000,
+)
