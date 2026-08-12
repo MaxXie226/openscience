@@ -16,6 +16,17 @@ import { Installer } from "./installer"
  * install is not more privileged than the kernel that will use it.
  */
 export namespace InstallerR {
+  /**
+   * The package index. A named constant rather than a literal inside the
+   * generated R script: it is the one value that decides where packages come
+   * from, and a test can assert it by equality instead of grepping this file
+   * for a domain — which reads to a static analyser as an incomplete URL check.
+   *
+   * Already covered by `Egress.DEFAULT_RULES`, so changing it means changing
+   * the allowlist too.
+   */
+  export const REPO = "https://cran.r-project.org"
+
   /** PEP 503-style normalisation is wrong for CRAN — R package names are
    *  case-sensitive and `.` is meaningful (`data.table`). Compared verbatim. */
   const key = (value: string) => value.trim()
@@ -47,7 +58,7 @@ export namespace InstallerR {
     const script = [
       `lib <- ${JSON.stringify(lib)}`,
       `.libPaths(c(lib, .libPaths()))`,
-      `install.packages(c(${names}), lib = lib, repos = "https://cran.r-project.org", quiet = TRUE)`,
+      `install.packages(c(${names}), lib = lib, repos = ${JSON.stringify(REPO)}, quiet = TRUE)`,
       // install.packages() signals failure with a warning, not a non-zero exit,
       // so a missing package would otherwise look like success.
       `missing <- setdiff(c(${names}), rownames(installed.packages(lib.loc = lib)))`,

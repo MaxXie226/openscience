@@ -13,13 +13,28 @@ test("the library path is derived from the environment directory, beside the int
   expect(Installer.rlibrary("/envs/e")).toBe(path.join("/envs/e", "rlibs"))
 })
 
-test("the install targets R_LIBS_USER and CRAN, never the system library", async () => {
+test("the index is CRAN, asserted by value rather than by grepping for a domain", () => {
+  // Equality on an exported constant, not `source.includes("cran...")`. The
+  // substring form reads to CodeQL as incomplete URL sanitization — a false
+  // positive, but the constant is the better design anyway: one named value
+  // decides where packages come from, and it has to stay in step with
+  // Egress.DEFAULT_RULES.
+  expect(InstallerR.REPO).toBe("https://cran.r-project.org")
+})
+
+test("the index CRAN is allowlisted, or every R install fails closed", async () => {
+  const { Egress } = await import("../../src/sandbox/egress")
+  const host = new URL(InstallerR.REPO).hostname
+  const allowed = Egress.allowed(host, Egress.DEFAULT_RULES)
+  expect(allowed).toBe(true)
+})
+
+test("the install targets R_LIBS_USER, never the system library", async () => {
   const source = await read("../../src/package/installer-r.ts")
   // Writing to the system library would need root and would leak this
   // environment's packages into every other project on the machine.
   expect(source.includes("R_LIBS_USER")).toBe(true)
   expect(source.includes("install.packages")).toBe(true)
-  expect(source.includes("cran.r-project.org")).toBe(true)
 })
 
 test("lib is passed explicitly, not left to .libPaths() ordering", async () => {
