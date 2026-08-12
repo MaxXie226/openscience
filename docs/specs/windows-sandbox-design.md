@@ -1,7 +1,7 @@
 # Windows sandbox — design
 
-Status: proposed, not implemented
-Date: 2026-08-11
+Status: proposed, not implemented. Core transport claim MEASURED 2026-08-12 — and the original claim was wrong.
+Date: 2026-08-11 (revised 2026-08-12)
 Branch: `feat/sandbox-network-policy` (Linux and macOS land there; this does not)
 
 ## Problem
@@ -74,8 +74,12 @@ take all network away for free and charge administrator rights to give one endpo
 
 Three properties, none requiring elevation:
 
-1. **An AppContainer without a network capability has no network.** Kernel-enforced. Not a rule layered over
-   an otherwise-connected process — the capability was never granted.
+1. **An AppContainer without a network capability has no network _off the machine_.** Kernel-enforced. Not a
+   rule layered over an otherwise-connected process — the capability was never granted. Measured: external
+   connect denied, host-loopback denied, DNS denied. **But loopback _inside_ the container is not filtered** —
+   two processes sharing the package SID talk freely, which is what makes the shim model work here (see "What
+   this changes about the model"). "No network" is the right summary for the threat model and the wrong summary
+   for the transport design; both matter.
 2. **`CreateAppContainerProfile` creates a per-user profile** and returns a stable `S-1-15-2-…` package SID.
    Microsoft's own `mxc` calls it from an ordinary backend, and the SID anchors filesystem ACEs downstream.
 3. **Named pipes can be ACL'd to that SID.** Creating the pipe with the right ACL is an ordinary user-mode
@@ -94,27 +98,51 @@ matcher used on Linux and macOS; only the transport differs.
 Linux and macOS are **socket-transparent**: unmodified `pip`, `curl` and `requests` work, because a shim inside
 the sandbox speaks HTTP-proxy protocol and forwards over the socket. That shim needs to listen on loopback.
 
-An AppContainer with no network capability has **no loopback either**, so no shim can exist. Windows is
-therefore **capability-mediated**: code must _ask_ the broker, not _connect_.
+**This section previously claimed Windows could not do that, and it was wrong.** It asserted that an
+AppContainer with no network capability has no loopback either, so no shim could exist, and concluded that
+Windows had to be capability-mediated — a different programming model, with package installation pushed into
+the broker's trust domain and notebook cells unable to fetch anything. That was reasoning, not measurement.
 
-Better security, worse compatibility. Concretely:
+`windows-appcontainer-probe.ps1` measured it on Windows 11 (10.0.26200), unelevated, with MpsSvc running and
+all three firewall profiles enabled. **Loopback works inside an AppContainer, including between two separate
+processes carrying the same package SID** — 8192 bytes echoed and content-verified, with the listener recording
+a real peer endpoint. The whole chain the design depends on holds end to end:
 
-|                                     | Linux / macOS        | Windows                                     |
-| ----------------------------------- | -------------------- | ------------------------------------------- |
-| Agent tools (`webfetch`, `compute`) | works                | works                                       |
-| `pip install` in a kernel           | works via proxy      | **needs the installer outside the sandbox** |
-| `requests.get(uniprot)` in a cell   | works                | **blocked**                                 |
-| A malicious package phoning home    | bounded by allowlist | blocked outright                            |
+```
+pip --(loopback, cross-process)--> shim --(named pipe)--> broker --> network
+      MEASURED: 8 KiB verified          MEASURED: 64 KiB each way
+```
 
-Two consequences worth deciding deliberately rather than discovering:
+So Windows can be socket-transparent exactly like the other two platforms, and the compatibility table this
+section used to carry is deleted rather than corrected — every row of it was a consequence of the false premise.
 
-- **Package installation must run in the broker's trust domain**, not inside the AppContainer, with the package
-  set already approved by its card. This is what the original spec described before the Linux proxy made a
-  separate install path unnecessary; Windows keeps it.
-- **A notebook cell cannot fetch a scientific API directly.** For a research product this is a real capability
-  gap, and it is the strongest argument against this design. The mitigation is a broker-backed fetch tool the
-  agent calls instead of using sockets — which works, but is a different programming model from the other two
-  platforms.
+**What the probe measured, with its controls:**
+
+| Claim                                                  | Result | Control that makes it mean something                                     |
+| ------------------------------------------------------ | ------ | ------------------------------------------------------------------------ |
+| `CreateAppContainerProfile` unelevated                 | works  | script refuses to interpret a run as Administrator                       |
+| loopback bind + listen inside the container            | works  | —                                                                        |
+| loopback round trip **across two processes**, same SID | works  | real peer endpoint recorded, payload byte-verified                       |
+| named pipe ACL'd to the package SID                    | works  | a **default-DACL** pipe was refused, so the grant is what did the work   |
+| that pipe as a real transport                          | works  | 64 KiB each way interleaved, content-verified, host agreed (65540 bytes) |
+| outbound to `1.1.1.1:443` with zero capabilities       | denied | MpsSvc running and all firewall profiles on                              |
+| reaching a listener on the **host** loopback           | denied | machine carries 2 unrelated loopback exemptions; ours was not one        |
+| DNS inside the container                               | denied | host resolves `pypi.org` fine, container does not                        |
+| reading or writing the user profile                    | denied | System32 stayed readable, so the tests were live                         |
+| wheel-shaped filesystem work (nested tree + 1 MiB)     | works  | content-verified on read-back                                            |
+
+Two findings that change the implementation rather than the architecture:
+
+- **The package's own `%TEMP%` is writable with no grant from us.** The probe's `icacls` step turned out to be
+  unnecessary — Windows provisions a per-package `AC\Temp` and the container can write it. The broker does not
+  have to provision scratch space.
+- **`TEMP`/`TMP` set by the launcher do not survive into the child.** Windows overrides them at process init.
+  Anything that steers the sandboxed process by environment variable — `HTTP_PROXY`, `PIP_INDEX_URL`,
+  `SSL_CERT_FILE` — must be verified to survive rather than assumed, and the path-shaped variables Windows
+  reserves per-package must be avoided entirely. **Still unmeasured:** whether ordinary (non-path) variables
+  survive; the probe captures `OS_PROBE_MARK` and `HTTP_PROXY` for exactly this question, and that field of the
+  report was not captured in the run above. If they do not survive, the shim must be pointed at the proxy by
+  `pip.ini` or an explicit `--proxy` argument instead.
 
 ## Upgrade path: `Experimental_CreateProcessInSandbox`
 
@@ -146,20 +174,37 @@ for Linux applies unchanged, and the elevated step belongs to Microsoft's instal
 
 ## Verification status
 
-**Nothing in this document has been executed.** There is no Windows machine on this project. Every claim about
-Linux in this branch was measured; every claim here is research and reasoning, on the platform where reasoning
-has already needed correcting twice.
+**Measured, on Windows 11 (10.0.26200), unelevated.** This document previously said nothing in it had been
+executed and listed four questions for a Windows owner. All four now have answers, from
+`windows-appcontainer-probe.ps1` in this directory.
 
-Before any of it is built, a Windows owner should confirm:
+| #   | Question                                                                   | Answer                                                                      |
+| --- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| 1   | `CreateAppContainerProfile` succeeds as a standard user, unelevated        | **yes**                                                                     |
+| 2   | A container with no network capability genuinely cannot open a socket      | **confirmed for external and host-loopback; NOT for in-container loopback** |
+| 3   | A named pipe ACL'd to the package SID is reachable from inside, unelevated | **yes**, and it carries sustained bidirectional traffic                     |
+| 4   | Whether _any_ in-container loopback listener is possible                   | **yes — including across two processes in the same container**              |
 
-1. `CreateAppContainerProfile` succeeds as a standard user, unelevated.
-2. A process in an AppContainer with no network capability genuinely cannot open a socket — including to
-   loopback.
-3. A named pipe ACL'd to that package SID is reachable from inside, unelevated.
-4. Whether _any_ in-container loopback listener is possible, since that single answer decides whether the
-   socket-transparent model can be recovered and `pip` can work inside the sandbox after all.
+Question 4 was the one that would most change the design, and it did: the socket-transparent model is
+recoverable, so `pip` can work inside the sandbox on Windows after all. Question 2's answer needs stating
+carefully rather than as a flat yes — the container reaches nothing outside itself, but loopback _within_ the
+container is not filtered, and that distinction is the entire finding.
 
-Question 4 is the one that would most change this design.
+Still unmeasured, and the next thing a Windows owner should check:
+
+1. **Whether ordinary environment variables survive into the container.** `TEMP`/`TMP` demonstrably do not.
+   The probe carries `OS_PROBE_MARK` and `HTTP_PROXY` canaries for this; that field was not captured in the
+   first run. It decides whether the shim can be pointed at the proxy by environment, as on Linux and macOS, or
+   needs `pip.ini` / an explicit `--proxy`.
+2. **Whether the broker can spawn the shim into an existing container** rather than both being launched
+   together — the probe started two peers itself, which is not quite the production arrangement.
+3. **Behaviour under a third-party endpoint agent.** This machine ran Windows Defender with MpsSvc healthy.
+   AppContainer network isolation is a WFP policy; a product that displaces or augments those filters could
+   change the denials, and a denial that is really a third-party filter is not the design working.
+
+Two smaller findings already recorded above: the package's own `%TEMP%` needs no grant from us, and this
+machine carried two pre-existing loopback exemptions belonging to other software — ours was not among them, so
+the host-loopback denial is genuine rather than inherited configuration.
 
 ## Sources
 
