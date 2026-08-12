@@ -42,6 +42,20 @@ test("a claim by a dead pid reconciles as unknown, not as success", async () => 
   const pid = proc.pid
   const captured = KernelProcessIdentity.startToken(pid)
   await proc.exited
+  // `await proc.exited` is not the same as "the pid is gone": a just-reaped
+  // child can stay signalable briefly, and on a macOS runner it did — the
+  // claim then reconciled as "running" and this failed for a reason that had
+  // nothing to do with reconcile. Wait for the premise to actually hold, and
+  // fail loudly if it never does rather than asserting on a live pid.
+  for (let i = 0; i < 100; i++) {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      break
+    }
+    await Bun.sleep(20)
+  }
+  expect(() => process.kill(pid, 0)).toThrow()
   await Environment.claim(project, "dead", pid, captured)
   const outcomes = await Environment.reconcile(project)
   // Not "fine": pip has no transactions, so an interrupted install may have
