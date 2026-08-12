@@ -76,6 +76,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-bun
+      # Same step the `test` job already has. The sandbox job never needed it
+      # until test/package/ joined it: those tests create a real project with
+      # `tmpdir({ git: true })`, and `git commit` exits 128 on a runner with no
+      # global identity configured.
+      - name: Configure git for tests
+        run: |
+          git config --global user.email "ci@openscience.dev"
+          git config --global user.name "OpenScience CI"
+          git config --global init.defaultBranch main
       - name: Install and verify Linux sandbox
         if: matrix.os == 'ubuntu-latest'
         run: |
