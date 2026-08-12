@@ -27,6 +27,31 @@ test("a written environment reads back", async () => {
   expect(await Environment.read(project, "e1")).toEqual(value)
 })
 
+test("writing a manifest that could not be read back throws instead", async () => {
+  // Regression. JSON.stringify drops undefined-valued keys, so a caller that
+  // omits one — a tool invoked without zod having applied its defaults — wrote
+  // a manifest that read() then rejected. The environment existed on disk,
+  // held installed packages, and was invisible to the inventory: silent, and
+  // indistinguishable from "never created" at every call site.
+  const bad = { name: "hole", requested: [], installed: {}, total: 0, createdAt: 1, updatedAt: 1 }
+  await expect(Environment.write(project, bad as never)).rejects.toThrow("unreadable")
+  expect(await Environment.read(project, "hole")).toBeUndefined()
+})
+
+test("a manifest that round-trips is exactly what write validated", async () => {
+  const value = {
+    name: "roundtrip",
+    language: "python" as const,
+    requested: ["numpy"],
+    installed: { numpy: "2.1.0" },
+    total: 1,
+    createdAt: 1,
+    updatedAt: 2,
+  }
+  await Environment.write(project, value)
+  expect(await Environment.read(project, "roundtrip")).toEqual(value)
+})
+
 test("reading an environment that does not exist is undefined, not a throw", async () => {
   expect(await Environment.read(project, "never-created")).toBeUndefined()
 })

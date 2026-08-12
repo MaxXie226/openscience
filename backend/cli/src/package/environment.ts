@@ -45,10 +45,29 @@ export namespace Environment {
     return parsed.success ? parsed.data : undefined
   }
 
+  /**
+   * Write the manifest, validating first.
+   *
+   * The parse is not ceremony. `JSON.stringify` drops keys whose value is
+   * `undefined`, so a caller that omits one — a tool invoked without zod
+   * having applied its defaults, say — writes a manifest that `read` then
+   * rejects. The result is an environment that exists on disk, holds installed
+   * packages, and is invisible to the inventory: silent, and indistinguishable
+   * from "never created" at every call site. Validating here turns that into a
+   * loud failure at the moment of the mistake.
+   */
   export async function write(projectID: string, value: Record) {
-    const file = manifest(projectID, value.name)
+    const parsed = Record.safeParse(value)
+    if (!parsed.success) {
+      throw new Error(
+        `Refusing to write an unreadable environment manifest for ${value.name}: ${parsed.error.issues
+          .map((i) => `${i.path.join(".") || "(root)"} ${i.message}`)
+          .join("; ")}`,
+      )
+    }
+    const file = manifest(projectID, parsed.data.name)
     await fs.mkdir(path.dirname(file), { recursive: true })
-    await Bun.write(file, JSON.stringify(value, null, 2))
+    await Bun.write(file, JSON.stringify(parsed.data, null, 2))
   }
 
   /** Every environment for a project. A manifest that fails to parse is skipped

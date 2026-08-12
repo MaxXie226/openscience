@@ -627,6 +627,24 @@ export namespace KernelRuntime {
     return identity
   }
 
+  /**
+   * Restart every kernel bound to a package environment, leaving every other
+   * kernel untouched. Called only for a non-additive change: a module already
+   * loaded into a live interpreter stays at its old version in memory while the
+   * files on disk say otherwise, and a silently stale module is worse than an
+   * obvious restart.
+   *
+   * NOT to be confused with the entry's existing `environment` field, which is
+   * a `KernelEnvironment` — the kernel's runtime context (cwd, sandbox
+   * platform) and nothing to do with installed packages. The package binding is
+   * carried separately as `boundEnvironment` precisely to keep the two apart.
+   *
+   * Body arrives with the kernel-binding task; there is nothing bound yet, so
+   * there is nothing to restart. Present now so `package_install` can call it
+   * without a forward reference.
+   */
+  export async function restartEnvironment(_projectID: string, _environment: string) {}
+
   export async function release(identity: KernelIdentity) {
     const value = records().entries.get(key(identity))
     if (!value) return

@@ -35,6 +35,7 @@ import { ScienceTools } from "./science"
 import { ProvenanceTools } from "./provenance"
 import { NotebookTool } from "./notebook"
 import { RKernelTool } from "./rkernel"
+import { PackageTool } from "./package"
 import { AtlasTool } from "./atlas"
 import { AtlasRecordTool } from "./atlas-record"
 import { ArtifactSnapshotTool } from "./artifact-snapshot"
@@ -139,6 +140,7 @@ export namespace ToolRegistry {
       AtlasRecordTool,
       NotebookTool,
       RKernelTool,
+      PackageTool,
       ArtifactTool,
       LearnTool,
       ModalTool,
