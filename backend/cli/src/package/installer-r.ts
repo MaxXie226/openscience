@@ -98,6 +98,31 @@ export namespace InstallerR {
     return out
   }
 
+  /** Every package an R kernel bound to this environment can load, system
+   *  libraries included — the same distinction `Installer.resolved` draws for
+   *  Python, and needed for the same reason: the restart decision is about what
+   *  the kernel sees, not what the environment owns. */
+  export async function resolved(directory: string) {
+    const lib = Installer.rlibrary(directory)
+    const script = [
+      `ip <- installed.packages()`,
+      `if (nrow(ip)) cat(paste(rownames(ip), ip[, "Version"], sep = "\t", collapse = "\n"))`,
+    ].join("\n")
+    const proc = Bun.spawn(["Rscript", "-e", script], {
+      env: { ...process.env, R_LIBS_USER: lib },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const text = await new Response(proc.stdout).text()
+    await proc.exited
+    const out: Record<string, string> = {}
+    for (const line of text.split("\n")) {
+      const [name, version] = line.split("\t")
+      if (name && version) out[name.trim()] = version.trim()
+    }
+    return out
+  }
+
   export async function verify(directory: string, packages: string[]) {
     const frozen = await freeze(directory)
     const out: Record<string, string> = {}

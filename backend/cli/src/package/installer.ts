@@ -265,6 +265,39 @@ export namespace Installer {
   }
 
   /**
+   * Every package the environment's interpreter can import, inherited ones
+   * included — what a KERNEL bound to this environment actually sees.
+   *
+   * Distinct from `freeze()` on purpose, and the distinction is load-bearing.
+   * `freeze()` answers "what does this environment own", which is the right
+   * question for the manifest. The restart decision asks something else: has
+   * what the kernel can import changed underneath it? Comparing owned-sets got
+   * that wrong the moment environments began inheriting system site-packages —
+   * requesting the version the host already provides installs nothing locally,
+   * so the package is absent from the "before" snapshot, and the next version
+   * then reads as an ADDITION rather than a change. Measured on CI:
+   * `six==1.16.0` then `six==1.17.0` reported additive, so kernels holding a
+   * stale `six` in memory were never restarted — exactly the silent staleness
+   * the rule exists to prevent.
+   */
+  export async function resolved(directory: string) {
+    const proc = Bun.spawn([interpreter(directory), "-m", "pip", "list", "--format=json"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const text = await new Response(proc.stdout).text()
+    await proc.exited
+    const parsed = (() => {
+      try {
+        return JSON.parse(text) as { name: string; version: string }[]
+      } catch {
+        return []
+      }
+    })()
+    return Object.fromEntries(parsed.map((p) => [normalise(p.name), p.version]))
+  }
+
+  /**
    * Report the version of each requested name **as the environment's own
    * interpreter resolves it**, whether it lives in the environment or is
    * inherited from the host.

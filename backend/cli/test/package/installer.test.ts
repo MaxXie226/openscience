@@ -383,3 +383,73 @@ test.skipIf(!sandboxed)(
   },
   600_000,
 )
+
+// The version of a package the host interpreter already provides, or undefined.
+// The bug below only appears when the requested version MATCHES the host's, so
+// the test has to discover that version rather than hardcode one.
+const hostVersion = (name: string) => {
+  const proc = Bun.spawnSync(
+    [python ?? "python3", "-c", `import importlib.metadata as m; print(m.version(${JSON.stringify(name)}))`],
+    { stdout: "pipe", stderr: "ignore" },
+  )
+  const text = proc.stdout.toString().trim()
+  return proc.exitCode === 0 && /^\d/.test(text) ? text : undefined
+}
+
+test.skipIf(!sandboxed || !hostVersion("six"))(
+  "a version change is not additive even when the host already provided the old one",
+  async () => {
+    // The bug CI caught, and the reason `resolved()` exists apart from
+    // `freeze()`. Requesting the exact version the host provides installs
+    // nothing locally, so an owned-set comparison sees no `six` in the "before"
+    // snapshot and reads the next version as an ADDITION. Kernels holding a
+    // stale six in memory were then never restarted — the silent staleness the
+    // whole restart rule exists to prevent.
+    const host = hostVersion("six")!
+    const other = host === "1.17.0" ? "1.16.0" : "1.17.0"
+
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "env")
+    await Installer.create(env, { kind: "venv", binary: python! })
+
+    const first = await Installer.install({ directory: env, packages: [`six==${host}`], index: "", source: false })
+    expect(first.ok, first.log).toBe(true)
+
+    const before = await Installer.resolved(env)
+    // The precondition that makes this test meaningful: the environment owns
+    // nothing, because the host already satisfied the request.
+    expect(Object.keys(await Installer.freeze(env))).not.toContain("six")
+    expect(before["six"]).toBe(host)
+
+    const second = await Installer.install({ directory: env, packages: [`six==${other}`], index: "", source: false })
+    expect(second.ok, second.log).toBe(true)
+
+    const after = await Installer.resolved(env)
+    expect(after["six"]).toBe(other)
+    const { Environment } = await import("../../src/package/environment")
+    expect(Environment.additive(before, after)).toBe(false)
+
+    // And the contrast that makes this a regression test rather than an
+    // assertion: comparing OWNED sets — what the code did before — calls the
+    // very same change additive, because the environment owned no six until the
+    // second install. Both lines have to stay true for the bug to be gone.
+    const ownedBefore = {} as Record<string, string>
+    const ownedAfter = await Installer.freeze(env)
+    expect(ownedAfter["six"]).toBe(other)
+    expect(Environment.additive(ownedBefore, ownedAfter)).toBe(true)
+  },
+  600_000,
+)
+
+test.skipIf(!python || !hostHas("numpy"))(
+  "resolved sees inherited packages, freeze does not",
+  async () => {
+    // The invariant behind the fix, stated once: two questions, two answers.
+    await using dir = await tmpdir()
+    const env = path.join(dir.path, "env")
+    await Installer.create(env, { kind: "venv", binary: python! })
+    expect(Object.keys(await Installer.resolved(env))).toContain("numpy")
+    expect(Object.keys(await Installer.freeze(env))).not.toContain("numpy")
+  },
+  120_000,
+)

@@ -171,8 +171,16 @@ export const PackageTool = Tool.define("package_install", {
       const tool = r ? undefined : await Installer.probe(directory)
       if (tool) await Installer.create(directory, tool)
 
-      const freeze = () => (r ? InstallerR.freeze(directory) : Installer.freeze(directory))
-      const snapshot = await freeze()
+      // Two different questions, deliberately asked of two different sources.
+      // `owned` is what the environment itself holds and becomes the manifest.
+      // `seen` is everything the interpreter can import, inherited packages
+      // included, and is the only correct basis for the restart decision:
+      // requesting a version the host already provides installs nothing
+      // locally, so an owned-set comparison reads the NEXT version as an
+      // addition and leaves stale modules loaded in live kernels.
+      const owned = () => (r ? InstallerR.freeze(directory) : Installer.freeze(directory))
+      const seen = () => (r ? InstallerR.resolved(directory) : Installer.resolved(directory))
+      const snapshot = await seen()
 
       // Report what pip is doing while it does it. A tool with no dedicated
       // renderer otherwise shows its name and an ellipsis for the whole call —
@@ -204,7 +212,8 @@ export const PackageTool = Tool.define("package_install", {
       // InstallerR, because install.packages() only warns and still exits 0.
       if (!result.ok) throw new Error(r ? InstallerR.explain(result.log) : Installer.explain(result.log))
 
-      const after = await freeze()
+      const after = await seen()
+      const held = await owned()
       const names = parsed.map((p) => p.name)
       const versions = r ? await InstallerR.verify(directory, names) : await Installer.verify(directory, names)
 
@@ -217,8 +226,8 @@ export const PackageTool = Tool.define("package_install", {
         // read back.
         language,
         requested,
-        installed: after,
-        total: Object.keys(after).length,
+        installed: held,
+        total: Object.keys(held).length,
         createdAt: before?.createdAt ?? Date.now(),
         updatedAt: Date.now(),
       })
@@ -235,7 +244,7 @@ export const PackageTool = Tool.define("package_install", {
         title: `Installed · ${name}`,
         output: [
           `Installed into ${name}: ${landed || "(nothing reported)"}.`,
-          `${Object.keys(after).length} packages total in the environment.`,
+          `${Object.keys(held).length} packages total in the environment.`,
           additive
             ? "Purely additive — running kernels kept their state."
             : "Not purely additive — kernels bound to this environment restarted and their variables were discarded.",
@@ -246,7 +255,7 @@ export const PackageTool = Tool.define("package_install", {
           ok: true,
           additive,
           versions,
-          total: Object.keys(after).length,
+          total: Object.keys(held).length,
         },
       }
     }
