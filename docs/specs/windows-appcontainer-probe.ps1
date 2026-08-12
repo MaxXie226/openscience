@@ -1276,7 +1276,22 @@ if ($ran -and $bits -ge 0) {
     elevated   = $elevated
     os         = [Environment]::OSVersion.Version.ToString()
   }
-  $bundle | ConvertTo-Json -Depth 7 | Write-Host
+  $json = $bundle | ConvertTo-Json -Depth 7
+  Write-Host $json
+  # Also written to a file beside this script, and deliberately NOT into the
+  # temp directory that cleanup removes. The first real run of this probe was
+  # reported by pasting the console output, which the terminal had truncated
+  # from the top - the environment-survival block was in the part that scrolled
+  # away, and that was the one question the run existed to answer.
+  $out = Join-Path (Split-Path -Parent $PSCommandPath) "probe-report.json"
+  try {
+    Set-Content -LiteralPath $out -Value $json -Encoding UTF8
+    Say ""
+    Say ("Full report written to: {0}" -f $out) "Green"
+    Say "Send that file rather than the console output - it cannot be truncated." "Green"
+  } catch {
+    Say ("Could not write the report file: {0}" -f $_.Exception.Message) "Yellow"
+  }
 } else {
   Say "3. No usable result - the child did not report." "Red"
   Say ("  launch stage : {0}" -f $(if ($res) { $res.Stage } else { "<none reached>" })) "Red"
@@ -1287,6 +1302,25 @@ if ($ran -and $bits -ge 0) {
   Say "  If CreateProcess succeeded and the marker is absent, the child started" "Yellow"
   Say "  and died before it could write. Re-run with -Keep and inspect the temp" "Yellow"
   Say "  directory; the usual cause is a path the token cannot read." "Yellow"
+  $out = Join-Path (Split-Path -Parent $PSCommandPath) "probe-report.json"
+  try {
+    @{
+      host    = $hostContext
+      sid     = $sid
+      failed  = $true
+      launch  = @{
+        stage        = $(if ($res) { $res.Stage } else { $null })
+        started      = $(if ($res) { $res.Started } else { $false })
+        win32        = $launchErr
+        earlierWin32 = $(if ($res) { $res.PreviousWin32Error } else { 0 })
+      }
+      marker  = $ran
+      exit    = $code
+      os      = [Environment]::OSVersion.Version.ToString()
+      elevated = $elevated
+    } | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath $out -Encoding UTF8
+    Say ("  Report written to: {0}" -f $out) "Yellow"
+  } catch { }
 }
 
 # -- Cleanup -----------------------------------------------------------------
