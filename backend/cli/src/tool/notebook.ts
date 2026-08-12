@@ -9,6 +9,8 @@ import { Instance } from "@/project/instance"
 import { OpenScience } from "@/openscience"
 import { Config } from "@/config/config"
 import { SessionFilesystem } from "@/session/filesystem"
+import { Environment } from "@/package/environment"
+import { Installer } from "@/package/installer"
 import { Sandbox } from "@/sandbox/sandbox"
 import { EgressRuntime } from "@/sandbox/egress-runtime"
 import { KernelQueue } from "@/science/kernel/queue"
@@ -199,7 +201,20 @@ interface RawPayload {
   execution_count: number
 }
 
-async function findPython(override?: string): Promise<string> {
+/**
+ * The interpreter a kernel runs. A managed environment's own interpreter wins
+ * when it exists; otherwise the host's.
+ *
+ * The fallback is deliberate. Failing closed on a missing environment would
+ * make a typo'd name indistinguishable from a broken machine — the exact
+ * failure mode this design started from, where a missing pip, a severed
+ * network and a read-only site-packages all surfaced as one opaque error.
+ */
+export async function findPython(override?: string, environment?: string): Promise<string> {
+  if (environment) {
+    const bin = Installer.interpreter(environment)
+    if (await Bun.file(bin).exists()) return bin
+  }
   const candidates = override ? [override] : ["python3", "python"]
   for (const bin of candidates) {
     try {
@@ -284,7 +299,7 @@ class PythonKernel implements Kernel {
     this.configPath = configPath
     this.cachePath = cachePath
 
-    const bin = await findPython(opts?.binary)
+    const bin = await findPython(opts?.binary, opts?.environment)
     const workspace = opts?.sessionID
       ? await SessionFilesystem.processWriteRoots(opts.sessionID)
       : [Instance.directory, Instance.worktree]
@@ -298,6 +313,13 @@ class PythonKernel implements Kernel {
       args: ["-u", scriptPath],
       workspace,
       extraWritable: [scriptPath, configPath, cachePath],
+      // Read-only, never writable. The kernel executes this interpreter, so it
+      // must be visible — but a writable environment would let arbitrary kernel
+      // code install into it directly (subprocess pip over the same allowlisted
+      // egress), reopening through the notebook tool the bypass the bash-tool
+      // refusal closes. Explicit rather than relying on `--ro-bind / /`, which
+      // does not survive `--tmpfs /tmp` if the cache root ever lives there.
+      ...(opts?.environment ? { readable: [opts.environment] } : {}),
       unreadable: OpenScience.kernelSensitivePaths(),
       options: { ...policy, egress },
     })
@@ -616,6 +638,16 @@ export const NotebookTool = Tool.define("notebook", {
         .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
         .optional()
         .describe("Stable name for an isolated managed kernel. Use a distinct name for each parallel analysis."),
+      environment: z
+        .string()
+        .trim()
+        .min(1)
+        .max(64)
+        .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
+        .optional()
+        .describe(
+          "Managed package environment this kernel runs in. Defaults to the project's default environment. Changing it restarts the kernel.",
+        ),
       timeout: z.number().default(120_000).describe("Execution timeout in ms (default: 120s, max: 600s)"),
     })
     .superRefine((params, issue) => {
@@ -660,11 +692,20 @@ export const NotebookTool = Tool.define("notebook", {
       metadata: {},
     })
 
-    const result = await KernelRuntime.execute(identity, params.code!, {
-      timeout: params.timeout,
-      signal: ctx.abort,
-      origin: { messageID: ctx.messageID, callID: ctx.callID, title, source: params.source },
-    })
+    // The binding point is the tool, not a route: POST /kernels was removed in
+    // #274/#275 and the agent names kernels through this parameter, so
+    // `environment` belongs beside `kernel`. Resolved to a directory here
+    // because the registry binds to a path, never to a project-scoped name.
+    const result = await KernelRuntime.execute(
+      identity,
+      params.code!,
+      {
+        timeout: params.timeout,
+        signal: ctx.abort,
+        origin: { messageID: ctx.messageID, callID: ctx.callID, title, source: params.source },
+      },
+      { environment: Environment.directory(Instance.project.id, params.environment ?? "default") },
+    )
 
     const images = result.outputs.filter((o) => o.type === "display" && o.data?.["image/png"])
     const dataUrls = images.map((o) => `data:image/png;base64,${o.data!["image/png"]}`)

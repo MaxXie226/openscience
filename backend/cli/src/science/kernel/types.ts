@@ -99,6 +99,15 @@ export interface KernelStartOptions {
   env?: Record<string, string>
   /** Interpreter binary override (e.g. a specific python/Rscript path). */
   binary?: string
+  /**
+   * Directory of the managed package environment this kernel binds to.
+   *
+   * A start option, never part of `KernelIdentity`: putting it in the identity
+   * tuple would rekey every persisted record and orphan them. Distinct from
+   * `KernelEnvironment`, which is the kernel's *runtime* context (cwd, sandbox
+   * platform) and has nothing to do with installed packages.
+   */
+  environment?: string
 }
 
 export interface KernelProcess {

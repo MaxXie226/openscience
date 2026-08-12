@@ -55,7 +55,16 @@ export const PackageTool = Tool.define("package_install", {
     // Already satisfied: skip outright — no card, no install, no restart.
     // Nothing privileged happens, so nothing needs approving, and a
     // fully-satisfied request is not worth a turn.
-    const satisfied = before && parsed.every((p) => before.installed[p.name])
+    // A bare name is satisfied by any installed version. A requirement that
+    // constrains *which* version — a specifier, a direct URL, or extras that
+    // may not have been installed — is never assumed satisfied: `six==1.17.0`
+    // against an installed 1.16.0 is an upgrade, and skipping it would silently
+    // no-op the request and wrongly report the change as additive. Deciding
+    // that properly needs PEP 440 comparison; deferring to pip, which already
+    // implements it and no-ops when it is genuinely satisfied, is both correct
+    // and cheaper than reimplementing it here.
+    const constrained = parsed.some((p) => p.specifier || p.url || p.extras.length)
+    const satisfied = before && !constrained && parsed.every((p) => before.installed[p.name])
     if (satisfied) {
       // The same metadata shape as the install branch below, deliberately.
       // Two shapes would make every consumer — the UI, the session record, a
@@ -139,8 +148,10 @@ export const PackageTool = Tool.define("package_install", {
         updatedAt: Date.now(),
       })
 
+      // Kernels bind to the environment *directory*, so that is what identifies
+      // them here — not the name, which the registry never sees.
       const additive = Environment.additive(snapshot, after)
-      if (!additive) await KernelRuntime.restartEnvironment(project, name)
+      if (!additive) await KernelRuntime.restartEnvironment(project, directory)
 
       const landed = Object.entries(versions)
         .map(([k, v]) => `${k} ${v}`)

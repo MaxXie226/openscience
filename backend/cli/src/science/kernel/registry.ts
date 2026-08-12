@@ -51,6 +51,17 @@ type Entry = {
   incarnation: number | null
   executionCount: number
   environment: KernelEnvironment | null
+  /**
+   * Directory of the managed package environment this kernel is bound to, or
+   * null for the host interpreter.
+   *
+   * Deliberately NOT the field above: `environment` is a `KernelEnvironment`,
+   * the kernel's runtime context (cwd, sandbox platform). Merging the two would
+   * bind kernels to the wrong thing. Deliberately not part of `KernelIdentity`
+   * either — that tuple is hashed into the storage key, so adding to it would
+   * orphan every persisted record.
+   */
+  boundEnvironment: string | null
   startedAt: number | null
   lastActivityAt: number | null
   authority: ExecutionAuthority.Decision | null
@@ -197,6 +208,7 @@ function restore(value: z.infer<typeof Persisted>) {
     incarnation: value.incarnation,
     executionCount: value.execution_count,
     environment: null,
+    boundEnvironment: null,
     startedAt: null,
     lastActivityAt: value.last_activity_at,
     authority: null,
@@ -240,6 +252,7 @@ const record = (identity: KernelIdentity) => {
     incarnation: null,
     executionCount: 0,
     environment: null,
+    boundEnvironment: null,
     startedAt: null,
     lastActivityAt: null,
     authority: null,
@@ -352,14 +365,21 @@ async function provenance(
   )
 }
 
-const entry = async (identity: KernelIdentity, _options?: KernelStartOptions) => {
+const entry = async (identity: KernelIdentity, options?: KernelStartOptions) => {
   const authority = await ExecutionAuthority.require({
     projectID: identity.projectID,
     sessionID: identity.sessionID,
     capability: "kernel",
   })
   const value = await hydrate(identity)
-  if (value.kernel?.ready && value.authority?.generation === authority.generation) return value
+  const bound = options?.environment ?? null
+  // Registry-level staleness, not authority-level: `ExecutionAuthority.require`
+  // takes no kernel identity, so `generation` cannot see which environment a
+  // given kernel is bound to. A live kernel pointed at a different environment
+  // is running the wrong interpreter, so it is torn down here on exactly the
+  // terms a generation change would use.
+  const rebind = value.boundEnvironment !== bound
+  if (value.kernel?.ready && value.authority?.generation === authority.generation && !rebind) return value
   if (value.kernel?.ready) {
     await value.manager.release(value.key)
     value.kernel = undefined
@@ -382,6 +402,7 @@ const entry = async (identity: KernelIdentity, _options?: KernelStartOptions) =>
   value.state = "stopped"
   value.kernel = undefined
   value.environment = null
+  value.boundEnvironment = bound
   value.incarnation = incarnation
   value.executionCount = 0
   value.startedAt = null
@@ -407,6 +428,7 @@ const entry = async (identity: KernelIdentity, _options?: KernelStartOptions) =>
     return value.manager.get(value.key, {
       sessionID: identity.sessionID,
       cwd: authority.workspace,
+      ...(bound ? { environment: bound } : {}),
     })
   })().then(
     async (kernel) => {
@@ -639,11 +661,23 @@ export namespace KernelRuntime {
    * platform) and nothing to do with installed packages. The package binding is
    * carried separately as `boundEnvironment` precisely to keep the two apart.
    *
-   * Body arrives with the kernel-binding task; there is nothing bound yet, so
-   * there is nothing to restart. Present now so `package_install` can call it
-   * without a forward reference.
+   * `environment` is the environment *directory*, which is what a kernel binds
+   * to — the caller resolves the name through `Environment.directory` so this
+   * never has to know the project layout.
+   *
+   * Releasing rather than restarting in place is deliberate: kernels are lazy,
+   * so the next cell boots a fresh one against the new interpreter. Eagerly
+   * respawning here would pay the startup cost for kernels the session may
+   * never touch again.
    */
-  export async function restartEnvironment(_projectID: string, _environment: string) {}
+  export async function restartEnvironment(projectID: string, environment: string) {
+    const values = Array.from(records().entries.values()).filter(
+      (value) => value.identity.projectID === projectID && value.boundEnvironment === environment,
+    )
+    // Sequential, not Promise.all: `release` mutates the shared records map,
+    // and the set is small by construction — one project's live kernels.
+    for (const value of values) await release(value.identity)
+  }
 
   export async function release(identity: KernelIdentity) {
     const value = records().entries.get(key(identity))

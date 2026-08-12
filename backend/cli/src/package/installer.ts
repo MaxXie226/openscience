@@ -36,6 +36,19 @@ export namespace Installer {
   }
 
   /**
+   * The environment's R library directory — R's equivalent of the interpreter
+   * binding, since R has no per-environment binary to point at. Reached through
+   * `R_LIBS_USER`, which is already in the kernel env allowlist.
+   *
+   * Kept beside `interpreter` rather than in the R installer so both language
+   * backends derive their paths from one place; a kernel needs this before any
+   * R install has ever run.
+   */
+  export function rlibrary(directory: string) {
+    return path.join(directory, "rlibs")
+  }
+
+  /**
    * The ladder, in order: an existing environment wins over any tool, then uv,
    * then venv, then a remedy.
    *

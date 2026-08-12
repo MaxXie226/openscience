@@ -338,6 +338,17 @@ export namespace Sandbox {
   function buildPolicy(input: {
     workspace: string[]
     extraWritable?: string[]
+    /**
+     * Paths that must be *visible* inside the sandbox but stay read-only.
+     *
+     * Distinct from `extraWritable` on purpose. A managed package environment
+     * has to be readable — the kernel executes its interpreter — but making it
+     * writable would let arbitrary kernel code install into it directly
+     * (`subprocess.run([sys.executable, "-m", "pip", "install", ...])` over the
+     * same allowlisted egress), reopening through the notebook tool exactly the
+     * bypass the bash-tool refusal closes.
+     */
+    readable?: string[]
     unreadable?: string[]
     options: Options
     backend: Backend
@@ -399,7 +410,8 @@ export namespace Sandbox {
     if (egress !== undefined && !egressOk) {
       log.warn("refusing to grant sandbox egress access to an over-broad path", { path: egress })
     }
-    return { writable, unreadable, network, ...(egressOk ? { egress } : {}) }
+    const readBind = dedupe(input.readable ?? []).filter((value) => !tooBroadToConfine(value))
+    return { writable, unreadable, network, ...(readBind.length ? { readBind } : {}), ...(egressOk ? { egress } : {}) }
   }
 
   // ── macOS: Seatbelt (sandbox-exec) ──────────────────────────────────────────
@@ -988,7 +1000,11 @@ export namespace Sandbox {
         })
       : undefined
     const argv = shim ? ["/bin/sh", "-c", shim] : [input.shell, "-c", input.command]
-    const s = specForArgv(argv, shimmed ? { ...policy, readBind: shimmed.bind } : policy, b)!
+    const s = specForArgv(
+      argv,
+      shimmed ? { ...policy, readBind: [...(policy.readBind ?? []), ...shimmed.bind] } : policy,
+      b,
+    )!
     log.info("sandboxing command", { backend: b, network: policy.network, writable: policy.writable.length })
     const proxy = proxyUrl(shim, b, policy)
     const env = proxy ? { HTTP_PROXY: proxy, HTTPS_PROXY: proxy, http_proxy: proxy, https_proxy: proxy } : undefined
@@ -1020,6 +1036,8 @@ export namespace Sandbox {
     workspace: string[]
     /** Extra paths (e.g. a generated kernel script under /tmp) to keep writable/visible. */
     extraWritable?: string[]
+    /** Paths that must be visible inside the sandbox but stay read-only. */
+    readable?: string[]
     /** Exact host credential files to mask from the process. */
     unreadable?: string[]
     options?: Options
@@ -1033,6 +1051,7 @@ export namespace Sandbox {
     const policy = buildPolicy({
       workspace: input.workspace,
       extraWritable: input.extraWritable,
+      readable: input.readable,
       unreadable: input.unreadable,
       options: input.options!,
       backend: b,
@@ -1047,7 +1066,7 @@ export namespace Sandbox {
       ? shimScript({ binary: plan.binary, port: SHIM_PORT, socket: policy.egress!, file: input.file, args: input.args })
       : undefined
     const argv = shim ? ["/bin/sh", "-c", shim] : [input.file, ...input.args]
-    const s = specForArgv(argv, plan ? { ...policy, readBind: plan.bind } : policy, b)!
+    const s = specForArgv(argv, plan ? { ...policy, readBind: [...(policy.readBind ?? []), ...plan.bind] } : policy, b)!
     log.info("sandboxing process", { backend: b, network: policy.network, writable: policy.writable.length })
     const proxy = proxyUrl(shim, b, policy)
     const env = proxy ? { HTTP_PROXY: proxy, HTTPS_PROXY: proxy, http_proxy: proxy, https_proxy: proxy } : undefined

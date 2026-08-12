@@ -9,6 +9,8 @@ import { Instance } from "@/project/instance"
 import { OpenScience } from "@/openscience"
 import { Config } from "@/config/config"
 import { SessionFilesystem } from "@/session/filesystem"
+import { Environment } from "@/package/environment"
+import { Installer } from "@/package/installer"
 import { Sandbox } from "@/sandbox/sandbox"
 import { EgressRuntime } from "@/sandbox/egress-runtime"
 import { KernelQueue } from "@/science/kernel/queue"
@@ -265,6 +267,10 @@ class RKernel implements Kernel {
       args: ["--vanilla", scriptPath],
       workspace,
       extraWritable: [scriptPath, configPath],
+      // The R library the kernel reads packages from. Read-only for the same
+      // reason the Python interpreter is: a writable library would let cell
+      // code call install.packages() directly and bypass the approval card.
+      ...(opts?.environment ? { readable: [Installer.rlibrary(opts.environment)] } : {}),
       unreadable: OpenScience.kernelSensitivePaths(),
       options: { ...policy, egress },
     })
@@ -286,6 +292,11 @@ class RKernel implements Kernel {
       env: {
         ...OpenScience.kernelEnv(process.env),
         ...(sandboxed.env ?? {}),
+        // R has no per-environment binary to point at, so the binding is a
+        // library path. R_LIBS_USER is already in the kernel env allowlist, and
+        // `install.packages` always exists — which is why R needs no installer
+        // ladder the way Python does.
+        ...(opts?.environment ? { R_LIBS_USER: Installer.rlibrary(opts.environment) } : {}),
         ...(opts?.env ?? {}),
         ATLAS_CLI_CONFIG_PATH: configPath,
       },
@@ -557,6 +568,16 @@ export const RKernelTool = Tool.define("rkernel", {
         .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
         .optional()
         .describe("Stable name for an isolated managed kernel. Use a distinct name for each parallel analysis."),
+      environment: z
+        .string()
+        .trim()
+        .min(1)
+        .max(64)
+        .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/)
+        .optional()
+        .describe(
+          "Managed package environment this kernel runs in. Defaults to the project's default environment. Changing it restarts the kernel.",
+        ),
       timeout: z.number().default(120_000).describe("Execution timeout in ms (default: 120s, max: 600s)"),
     })
     .superRefine((params, issue) => {
@@ -615,11 +636,16 @@ export const RKernelTool = Tool.define("rkernel", {
       }
     }
 
-    const result = await KernelRuntime.execute(identity, params.code!, {
-      timeout: params.timeout,
-      signal: ctx.abort,
-      origin: { messageID: ctx.messageID, callID: ctx.callID, title, source: params.source },
-    })
+    const result = await KernelRuntime.execute(
+      identity,
+      params.code!,
+      {
+        timeout: params.timeout,
+        signal: ctx.abort,
+        origin: { messageID: ctx.messageID, callID: ctx.callID, title, source: params.source },
+      },
+      { environment: Environment.directory(Instance.project.id, params.environment ?? "default") },
+    )
 
     const images = result.outputs.filter((o) => o.type === "display" && o.data?.["image/png"])
     const dataUrls = images.map((o) => `data:image/png;base64,${o.data!["image/png"]}`)

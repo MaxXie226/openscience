@@ -149,6 +149,40 @@ test.skipIf(!live)(
 )
 
 test.skipIf(!live)(
+  "a pinned version is never treated as already satisfied by a different one",
+  async () => {
+    // Regression. The skip check compared package NAMES only, so
+    // `six==1.17.0` against an installed 1.16.0 returned "already installed",
+    // skipped the install, and reported the change as additive — leaving the
+    // environment on the old version while telling the agent it had the new
+    // one, and leaving bound kernels un-restarted.
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const { PackageTool } = await import("../../src/tool/package")
+        const tool = await PackageTool.init()
+        await tool.execute(
+          { packages: ["six==1.16.0"], environment: "pin", language: "python", source: false },
+          (await context()).ctx,
+        )
+        const upgrade = await context()
+        const result = await tool.execute(
+          { packages: ["six==1.17.0"], environment: "pin", language: "python", source: false },
+          upgrade.ctx,
+        )
+        // It really ran, it really asked, and it knows the change was not additive.
+        expect(upgrade.asks).toHaveLength(1)
+        expect(result.metadata.installed).toBe(true)
+        expect(result.metadata.additive).toBe(false)
+        expect(result.metadata.versions["six"]).toBe("1.17.0")
+      },
+    })
+  },
+  600_000,
+)
+
+test.skipIf(!live)(
   "a failed install throws the translated cause and writes no manifest",
   async () => {
     await using tmp = await tmpdir({ git: true })
