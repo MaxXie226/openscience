@@ -1235,7 +1235,16 @@ export namespace Sandbox {
   }
 
   function firstLine(s?: string): string | undefined {
-    const line = s?.trim().split("\n")[0]
+    // Skip our OWN diagnostic lines. The launcher's debug dump goes to the same
+    // stderr the checks read for the child's error, so with the dump on, every
+    // failure reported the first line of the dump instead of what went wrong —
+    // a diagnostic destroying the evidence it exists to surface, for the fourth
+    // time in this feature.
+    const line = s
+      ?.trim()
+      .split("\n")
+      .map((value) => value.trim())
+      .find((value) => value && !value.startsWith("openscience[appcontainer]"))
     return line || undefined
   }
 
@@ -1360,7 +1369,37 @@ export namespace Sandbox {
         }
       }
 
-      const inside = await run(`printf hi > "${work}/probe" && cat "${work}/probe"`, "allow")
+      // `printf` and `cat` do not exist in cmd.exe. The probe was POSIX-only, so
+      // on Windows this check could never pass and reported the sandbox as
+      // unable to write inside its own workspace — when the real fault was that
+      // the command did not exist. Compose per shell family instead.
+      const probe = path.join(work, "probe")
+      const write = (target: string, text: string) => {
+        switch (Shell.family(shell)) {
+          case "cmd":
+            // No space before ">", or cmd writes the space into the file.
+            return `echo ${text}>"${target}"`
+          case "powershell":
+            return `$ErrorActionPreference='Stop'; Set-Content -LiteralPath "${target}" -Value '${text}'`
+          default:
+            return `printf ${text} > "${target}"`
+        }
+      }
+      const read = (target: string) => {
+        switch (Shell.family(shell)) {
+          case "cmd":
+            return `type "${target}"`
+          case "powershell":
+            return `Get-Content -LiteralPath "${target}"`
+          default:
+            return `cat "${target}"`
+        }
+      }
+      // `;` for PowerShell because `&&` is PowerShell 7 only, and 5.1 is still
+      // what a default Windows box has; $ErrorActionPreference makes the first
+      // statement failing terminate the pipeline anyway.
+      const join = Shell.family(shell) === "powershell" ? "; " : " && "
+      const inside = await run(`${write(probe, "hi")}${join}${read(probe)}`, "allow")
       const insideOk = inside.status === 0
       checks.push({
         name: "write inside the workspace succeeds",
@@ -1381,7 +1420,7 @@ export namespace Sandbox {
       }
 
       fs.rmSync(outside, { force: true })
-      const escape = await run(`printf x > "${outside}"`, "allow")
+      const escape = await run(write(outside, "x"), "allow")
       const escaped = fs.existsSync(outside)
       checks.push({
         name: "write outside the workspace is blocked",

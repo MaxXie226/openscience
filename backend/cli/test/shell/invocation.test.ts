@@ -46,3 +46,35 @@ test("the command is passed through untouched", () => {
   expect(Shell.invocation("/bin/sh", command)).toEqual(["-c", command])
   expect(Shell.invocation("cmd.exe", command)).toEqual(["/c", command])
 })
+
+test.each([
+  ["cmd.exe", "cmd"],
+  ["C:\\WINDOWS\\system32\\CMD.EXE", "cmd"],
+  ["powershell.exe", "powershell"],
+  ["C:\\Program Files\\PowerShell\\7\\pwsh.exe", "powershell"],
+  ["C:\\Program Files\\Git\\bin\\bash.exe", "posix"],
+  ["/bin/sh", "posix"],
+] as Array<[string, ReturnType<typeof Shell.family>]>)("%s speaks %s", (shell, expected) => {
+  expect(Shell.family(shell)).toBe(expected)
+})
+
+test("family() exists because the flag alone is not enough", async () => {
+  // cmd.exe has no printf and no cat. The sandbox self-test probed with
+  // `printf hi > f && cat f`, which on Windows failed because neither command
+  // exists — and was reported as the sandbox being unable to write inside its
+  // own workspace, one layer after the /c fix had made commands run at all.
+  const source = await Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname).text()
+  const body = source.slice(source.indexOf("export async function selfTest"))
+  expect(body).toContain("Shell.family(shell)")
+  expect(body).toContain("type ")
+  // The POSIX spelling must still be there for Linux and macOS.
+  expect(body).toContain("printf ")
+})
+
+test("the self-test's own diagnostics never masquerade as the child's error", async () => {
+  // The launcher's debug dump shares stderr with the child, so firstLine() was
+  // returning the first line of the dump for every failure.
+  const source = await Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname).text()
+  const body = source.slice(source.indexOf("function firstLine"), source.indexOf("function runAsync"))
+  expect(body).toContain('startsWith("openscience[appcontainer]")')
+})

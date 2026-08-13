@@ -189,15 +189,36 @@ export namespace Shell {
    * command must NOT do.
    */
   export function invocation(shell: string, command: string): string[] {
-    // Split on BOTH separators and drop `.exe` unconditionally, rather than
-    // branching on `process.platform`. The branch would be untestable from a
-    // Linux CI box — which is where this has to be verified, since the machine
-    // that exposed the bug is not one we can run tests on. A POSIX file named
-    // literally `cmd.exe` would be read as cmd; that is not a real shell.
+    switch (family(shell)) {
+      case "cmd":
+        return ["/c", command]
+      case "powershell":
+        return ["-NoProfile", "-Command", command]
+      default:
+        return ["-c", command]
+    }
+  }
+
+  /**
+   * Which command language this shell speaks.
+   *
+   * Not just which FLAG it takes. `cmd.exe` has no `printf` and no `cat`, so a
+   * caller composing a command has to know the family too — the sandbox
+   * self-test wrote its probe file with `printf hi > f && cat f`, which on
+   * Windows failed for the plain reason that neither command exists, and read
+   * as the sandbox being unable to write inside its own workspace.
+   *
+   * Split on BOTH separators and drop `.exe` unconditionally, rather than
+   * branching on `process.platform`: that branch would be untestable from a
+   * Linux CI box, which is where this has to be verified since the machine that
+   * exposed the bug is not one the suite can run on. A POSIX file named
+   * literally `cmd.exe` would be read as cmd; that is not a real shell.
+   */
+  export function family(shell: string): "cmd" | "powershell" | "posix" {
     const name = (shell.split(/[\\/]/).pop() ?? shell).toLowerCase().replace(/\.exe$/, "")
-    if (name === "cmd" || name === "command") return ["/c", command]
-    if (name === "powershell" || name === "pwsh") return ["-NoProfile", "-Command", command]
-    return ["-c", command]
+    if (name === "cmd" || name === "command") return "cmd"
+    if (name === "powershell" || name === "pwsh") return "powershell"
+    return "posix"
   }
 
   function exists(p: string) {
