@@ -50,6 +50,45 @@ export namespace Installer {
   }
 
   /**
+   * The base interpreter a managed environment delegates to, per its own
+   * `pyvenv.cfg` — not a guess, the value venv itself wrote.
+   *
+   * A venv does not contain a complete Python. On Windows `Scripts\python.exe`
+   * is a REDIRECTOR that starts the interpreter named by `home`; on POSIX the
+   * binary is a symlink to it. Either way the base installation has to be
+   * reachable, and inside an AppContainer nothing is reachable unless its ACL
+   * says so. Without this the redirector reported `No Python at '...'` for an
+   * interpreter that was present and working the whole time.
+   */
+  export async function base(directory: string) {
+    const cfg = Bun.file(path.join(directory, "pyvenv.cfg"))
+    if (!(await cfg.exists().catch(() => false))) return undefined
+    const text = await cfg.text().catch(() => "")
+    for (const line of text.split("\n")) {
+      const home = line.match(/^\s*home\s*=\s*(.+?)\s*$/)?.[1]
+      if (home) return home
+    }
+    return undefined
+  }
+
+  /**
+   * The base interpreter, but ONLY where the sandbox has to be told about it.
+   *
+   * bubblewrap binds the whole filesystem read-only and seatbelt allows reads
+   * unless denied, so on those two this is not merely redundant — it is
+   * actively harmful. Naming a path there adds a bind whose destination bwrap
+   * then has to create under a read-only root, and it fails: measured as
+   * `bwrap: Can't mkdir .../uv/python/cpython-3.12-linux-x86_64-gnu/bin` for a
+   * uv-managed interpreter, breaking three Linux installs that had been green.
+   * Windows is the only backend where reads must be granted explicitly.
+   */
+  export async function baseReadable(directory: string) {
+    if (process.platform !== "win32") return []
+    const home = await base(directory)
+    return home ? [home] : []
+  }
+
+  /**
    * A tool on PATH that actually runs.
    *
    * `Bun.which` alone is not enough, and Windows is where that bites. A default
@@ -381,10 +420,14 @@ export namespace Installer {
   async function confined(directory: string, argv: string[]) {
     const policy = await Config.trustedSandbox()
     const egress = await EgressRuntime.egressFor(policy)
+    // The base interpreter is READ-only on purpose: the install must be able to
+    // start Python, not to modify the Python installation it runs on.
+    const readable = await baseReadable(directory)
     return Sandbox.wrapArgv({
       file: argv[0]!,
       args: argv.slice(1),
       workspace: [directory, shared()],
+      ...(readable.length ? { readable } : {}),
       options: { ...policy, egress },
     })
   }

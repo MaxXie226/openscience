@@ -215,3 +215,54 @@ test("the CreateProcess failure explains 203, the code a real machine returned",
   // And the flag that described an environment block we never supply is gone.
   expect(code).not.toContain("CREATE_UNICODE_ENVIRONMENT")
 })
+
+test("readable paths reach the launcher and are granted read+execute, not full control", async () => {
+  // The gap that made Windows look like a broken machine. bubblewrap binds the
+  // whole filesystem read-only and seatbelt allows reads unless denied, so
+  // `readable` is a no-op on both and its absence here went unnoticed. An
+  // AppContainer reaches nothing whose ACL does not name its package SID, so
+  // dropping it left the kernel unable to read its own interpreter: `dir`
+  // returned "Access is denied" and the venv redirector reported
+  // `No Python at '...'` for a Python that was installed and working.
+  const args = Sandbox.appContainerArgs(
+    {
+      writable: ["C:\\work\\project"],
+      readable: ["C:\\Python312"],
+      unreadable: [],
+      network: "deny" as const,
+      profile: "openscience-deadbeef",
+    },
+    ["python.exe"],
+  )
+  expect(AppContainer.decode(args[1]!).readable).toEqual(["C:\\Python312"])
+
+  const source = await Bun.file(new URL("../../src/sandbox/appcontainer.ts", import.meta.url).pathname).text()
+  const body = source.slice(source.indexOf("export function grant"), source.indexOf("export function quote"))
+  // Read AND execute: the interpreter must be runnable, so plain (R) is not
+  // enough. Never (F) for the read set — that would hand a sandboxed process
+  // write access to the Python installation it is confined away from.
+  expect(body).toContain("(OI)(CI)(RX)")
+  expect(body).toContain("(OI)(CI)(F)")
+  expect(body.indexOf("(OI)(CI)(F)")).toBeLessThan(body.indexOf("(OI)(CI)(RX)"))
+})
+
+test("a path that is already writable is not re-granted as read-only", () => {
+  // Two ACEs for one SID on one path is not wrong, but the weaker one is noise
+  // in `icacls` output and makes a real grant failure harder to spot.
+  const args = Sandbox.appContainerArgs(
+    {
+      writable: ["C:\\work\\project"],
+      readable: ["C:\\work\\project", "C:\\Python312"],
+      unreadable: [],
+      network: "deny" as const,
+      profile: "p",
+    },
+    ["x.exe"],
+  )
+  const spec = AppContainer.decode(args[1]!)
+  expect(spec.readable).toContain("C:\\work\\project")
+  // The de-duplication is in grant(), which is where both lists are known.
+  expect(Bun.file(new URL("../../src/sandbox/appcontainer.ts", import.meta.url).pathname).text()).resolves.toContain(
+    "readable.filter((p) => !writable.includes(p))",
+  )
+})

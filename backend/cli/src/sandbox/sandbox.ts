@@ -43,6 +43,16 @@ export namespace Sandbox {
     writable: string[]
     /** Exact host files the sandboxed process must not be able to read. */
     unreadable?: string[]
+    /**
+     * Paths the sandboxed process must be able to READ but not write.
+     *
+     * Only the AppContainer backend consumes this: bubblewrap already binds the
+     * whole filesystem read-only and seatbelt allows reads unless denied, so on
+     * those two it would be a no-op. On Windows nothing is readable unless its
+     * ACL names the package SID, so this is what makes an interpreter outside
+     * the workspace reachable at all.
+     */
+    readable?: string[]
     /** How the sandboxed process may reach the network. */
     network: "deny" | "allowlist" | "allow"
     /**
@@ -456,11 +466,23 @@ export namespace Sandbox {
     // directory, and the launcher would then ask for a pipe nobody serves.
     if (input.backend === "appcontainer") {
       const pipe = input.options.egress?.trim()
+      // `readable` matters HERE and nowhere else, which is why it was missed.
+      //
+      // bubblewrap mounts the whole filesystem read-only (`--ro-bind / /`) and
+      // seatbelt allows reads unless denied, so on both of those a path the
+      // process only needs to READ is already reachable and `readable` is a
+      // no-op. An AppContainer is the opposite: it reaches nothing whose ACL
+      // does not name its package SID. Dropping `readable` there left the
+      // kernel unable to read its own interpreter — measured as `dir` returning
+      // "Access is denied" and a venv redirector reporting `No Python at ...`
+      // for a base interpreter that was present the whole time.
+      const readable = dedupe(input.readable ?? []).filter((value) => !tooBroadToConfine(value))
       return {
         writable,
         unreadable,
         network,
         profile: appContainerProfile(input.workspace),
+        ...(readable.length ? { readable } : {}),
         ...(pipe ? { egress: pipe } : {}),
       }
     }
@@ -728,6 +750,7 @@ export namespace Sandbox {
     const spec = {
       profile: policy.profile,
       writable: policy.writable,
+      readable: policy.readable ?? [],
       unreadable: policy.unreadable ?? [],
       network: policy.network,
       ...(policy.egress ? { pipe: policy.egress } : {}),

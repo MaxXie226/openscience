@@ -31,6 +31,8 @@ export namespace AppContainer {
   export type Spec = {
     profile: string
     writable: string[]
+    /** Paths the child must READ but not write — its interpreter, above all. */
+    readable?: string[]
     unreadable: string[]
     network: "deny" | "allowlist" | "allow"
     /** Broker pipe name, when network is "allowlist". */
@@ -222,15 +224,25 @@ export namespace AppContainer {
    * is partly ungrantable should still launch and fail visibly at the write,
    * not vanish behind a launcher error.
    */
-  export function grant(sid: string, paths: string[]) {
+  export function grant(sid: string, writable: string[], readable: string[] = []) {
     const failures: string[] = []
-    for (const target of paths) {
-      const proc = Bun.spawnSync(["icacls.exe", target, "/grant", `*${sid}:(OI)(CI)(F)`, "/Q"], {
-        stdout: "ignore",
-        stderr: "pipe",
-      })
-      if (proc.exitCode !== 0) failures.push(`${target}: ${proc.stderr.toString().trim() || `exit ${proc.exitCode}`}`)
-    }
+    // Read-and-execute, not full control, for the read set. The interpreter has
+    // to be EXECUTABLE as well as readable — a venv's Scripts\python.exe is a
+    // redirector that starts the base interpreter — so plain (R) is not enough,
+    // and (F) would hand the sandbox write access to the Python installation it
+    // is supposed to be confined away from.
+    const rights: Array<[string[], string]> = [
+      [writable, "(OI)(CI)(F)"],
+      [readable.filter((p) => !writable.includes(p)), "(OI)(CI)(RX)"],
+    ]
+    for (const [paths, mask] of rights)
+      for (const target of paths) {
+        const proc = Bun.spawnSync(["icacls.exe", target, "/grant", `*${sid}:${mask}`, "/Q"], {
+          stdout: "ignore",
+          stderr: "pipe",
+        })
+        if (proc.exitCode !== 0) failures.push(`${target}: ${proc.stderr.toString().trim() || `exit ${proc.exitCode}`}`)
+      }
     return failures
   }
 
@@ -416,7 +428,7 @@ export namespace AppContainer {
   export async function main(blob: string, argv: string[]): Promise<number> {
     const spec = decode(blob)
     const sid = ensureProfile(spec.profile)
-    const failures = grant(sid, spec.writable)
+    const failures = grant(sid, spec.writable, spec.readable ?? [])
     for (const failure of failures) process.stderr.write(`openscience: could not grant sandbox access to ${failure}\n`)
     return launch(sid, argv)
   }

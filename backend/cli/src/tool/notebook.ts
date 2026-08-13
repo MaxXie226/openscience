@@ -317,6 +317,7 @@ class PythonKernel implements Kernel {
     this.cachePath = cachePath
 
     const bin = await findPython(opts?.binary, opts?.environment)
+    const base = opts?.environment ? await Installer.baseReadable(opts.environment) : []
     const workspace = opts?.sessionID
       ? await SessionFilesystem.processWriteRoots(opts.sessionID)
       : [Instance.directory, Instance.worktree]
@@ -336,7 +337,12 @@ class PythonKernel implements Kernel {
       // egress), reopening through the notebook tool the bypass the bash-tool
       // refusal closes. Explicit rather than relying on `--ro-bind / /`, which
       // does not survive `--tmpfs /tmp` if the cache root ever lives there.
-      ...(opts?.environment ? { readable: [opts.environment] } : {}),
+      // The base interpreter belongs here too. A venv is not a complete Python:
+      // its interpreter delegates to the installation named in `pyvenv.cfg`, and
+      // an AppContainer reaches nothing it has not been granted — so without the
+      // base the redirector reports `No Python at '...'` for an interpreter that
+      // is present and working. Read-only for the same reason the environment is.
+      ...(opts?.environment ? { readable: [opts.environment, ...base] } : {}),
       unreadable: OpenScience.kernelSensitivePaths(),
       options: { ...policy, egress },
     })

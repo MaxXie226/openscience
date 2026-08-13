@@ -157,3 +157,27 @@ test("interpreter() and locate() agree for an environment built here", async () 
     await (await import("fs/promises")).rm(dir, { recursive: true, force: true }).catch(() => {})
   }
 }, 180_000)
+
+test("the base interpreter is only offered to the sandbox that needs it", async () => {
+  // Adding it unconditionally broke three green Linux installs:
+  //   bwrap: Can't mkdir .../uv/python/cpython-3.12-linux-x86_64-gnu/bin
+  // bubblewrap binds the whole filesystem read-only and seatbelt allows reads
+  // unless denied, so naming the path there is not redundant, it is a bind whose
+  // destination cannot be created under a read-only root. Windows is the only
+  // backend where a read has to be granted.
+  const dir = path.join(
+    process.env["TMPDIR"] ?? "/tmp",
+    `openscience-base-${process.pid}-${process.hrtime.bigint().toString(36)}`,
+  )
+  const tool = await Installer.probe(dir)
+  await Installer.create(dir, tool)
+  try {
+    // venv always writes it, so the value is available on every platform...
+    expect(await Installer.base(dir)).toBeTruthy()
+    // ...but it is only handed to the sandbox on Windows.
+    const offered = await Installer.baseReadable(dir)
+    expect(offered).toEqual(process.platform === "win32" ? [(await Installer.base(dir))!] : [])
+  } finally {
+    await (await import("fs/promises")).rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+}, 180_000)
