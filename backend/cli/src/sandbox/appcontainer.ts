@@ -294,6 +294,22 @@ export namespace AppContainer {
   }
 
   export function commandLine(argv: string[]) {
+    // cmd.exe is the exception to `quote`, and it fails in a way that reads as
+    // a broken sandbox. It does NOT parse its `/c` tail with
+    // `CommandLineToArgvW` and does not recognise a backslash-escaped quote, so
+    // quoting the tail the normal way produced, on a real machine:
+    //   echo hi>"C:\...\probe"   ->   "echo hi>\"C:\...\probe\""
+    // and cmd read the backslashes literally, answering "The filename,
+    // directory name, or volume label syntax is incorrect." The same shape turned
+    // `dir C:\` into `dir C:\\`.
+    //
+    // With `/s` cmd strips exactly the first and last quote and takes the rest
+    // verbatim, so the tail is wrapped once and left alone. This is what Node
+    // does for every Windows spawn.
+    const at = argv.findIndex((value) => value.toLowerCase() === "/c")
+    if (at > 0 && /(^|[\\/])cmd(\.exe)?$/i.test(argv[0] ?? "")) {
+      return `${argv.slice(0, at + 1).map(quote).join(" ")} "${argv.slice(at + 1).join(" ")}"`
+    }
     return argv.map(quote).join(" ")
   }
 

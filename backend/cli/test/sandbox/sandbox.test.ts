@@ -1207,9 +1207,12 @@ describe("Sandbox.plan on win32", () => {
     const p = Sandbox.plan({ ...base, command: "whoami /groups", shell: "C:\\Windows\\system32\\cmd.exe" })
     // The launcher argv is: openscience __appcontainer-launch <spec> -- <shell> /c <cmd>
     const tail = p.args!.slice(p.args!.indexOf("--") + 1)
-    expect(tail[1]).toBe("/c")
+    // /d /s /c, the shape Node uses: /s makes cmd take the tail verbatim after
+    // stripping one quote pair, /d skips AutoRun registry commands so a
+    // sandboxed command cannot be prefixed by machine-local configuration.
+    expect(tail.slice(1, 4)).toEqual(["/d", "/s", "/c"])
     expect(tail).not.toContain("-c")
-    expect(tail[2]).toBe("whoami /groups")
+    expect(tail[4]).toBe("whoami /groups")
   })
 
   test("a Git Bash shell still gets -c", () => {

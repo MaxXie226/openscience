@@ -319,3 +319,35 @@ test("the self-test can print the token instead of only judging it", async () =>
   const body = text.slice(text.indexOf("export async function selfTest"))
   expect(body).toContain("--- child token ---")
 })
+
+test("cmd.exe gets its tail verbatim, not CommandLineToArgvW quoting", () => {
+  // Measured on a real machine. cmd does NOT parse its /c tail with
+  // CommandLineToArgvW and does not recognise a backslash-escaped quote, so
+  // quoting the tail normally produced
+  //   "echo hi>\"C:\\...\\probe\""
+  // and cmd answered "The filename, directory name, or volume label syntax is
+  // incorrect." The same shape turned `dir C:\` into `dir C:\\`.
+  const command = 'echo hi>"C:\\Users\\naray\\AppData\\Local\\Temp\\openscience-sbx-ab12\\probe"'
+  const line = AppContainer.commandLine(["C:\\WINDOWS\\system32\\cmd.exe", "/d", "/s", "/c", command])
+  // The tail is wrapped exactly once and its inner quotes are untouched: with
+  // /s cmd strips the first and last quote and takes the rest verbatim.
+  // The exe path has no spaces, so quote() correctly leaves it bare.
+  expect(line).toBe(`C:\\WINDOWS\\system32\\cmd.exe /d /s /c "${command}"`)
+  expect(line).not.toContain('\\"')
+})
+
+test("the trailing-backslash case that broke `dir C:\\`", () => {
+  const line = AppContainer.commandLine(["cmd.exe", "/d", "/s", "/c", "dir C:\\"])
+  // Not `dir C:\\`, which is what doubling the backslash produced.
+  expect(line).toBe('cmd.exe /d /s /c "dir C:\\"')
+})
+
+test("everything that is not cmd still gets CommandLineToArgvW quoting", () => {
+  // The rule is a property of the TARGET's parser, so only cmd is special. A
+  // path with a space must still round-trip for python.exe.
+  const line = AppContainer.commandLine(["C:\\Py 3\\python.exe", "-c", 'print("hi")'])
+  expect(line).toContain('"C:\\Py 3\\python.exe"')
+  expect(line).toContain('\\"')
+  // And an executable merely named like cmd in an argument does not trigger it.
+  expect(AppContainer.commandLine(["python.exe", "/c", "x"])).toBe("python.exe /c x")
+})

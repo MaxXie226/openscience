@@ -17,10 +17,10 @@ import { Shell } from "../../src/shell/shell"
  */
 
 test.each([
-  ["cmd.exe", ["/c", "echo hi"]],
-  ["C:\\Windows\\system32\\cmd.exe", ["/c", "echo hi"]],
+  ["cmd.exe", ["/d", "/s", "/c", "echo hi"]],
+  ["C:\\Windows\\system32\\cmd.exe", ["/d", "/s", "/c", "echo hi"]],
   // COMSPEC is what Shell.fallback() returns on Windows, and its casing varies.
-  ["C:\\WINDOWS\\SYSTEM32\\CMD.EXE", ["/c", "echo hi"]],
+  ["C:\\WINDOWS\\SYSTEM32\\CMD.EXE", ["/d", "/s", "/c", "echo hi"]],
   ["powershell.exe", ["-NoProfile", "-Command", "echo hi"]],
   ["C:\\Program Files\\PowerShell\\7\\pwsh.exe", ["-NoProfile", "-Command", "echo hi"]],
   // Git Bash is preferred over cmd by Shell.fallback(), and is POSIX.
@@ -44,7 +44,7 @@ test("the command is passed through untouched", () => {
   // arguments, so a shell-quoting pass would corrupt it.
   const command = `printf 'a b' > "/tmp/x y" && echo "done"`
   expect(Shell.invocation("/bin/sh", command)).toEqual(["-c", command])
-  expect(Shell.invocation("cmd.exe", command)).toEqual(["/c", command])
+  expect(Shell.invocation("cmd.exe", command)).toEqual(["/d", "/s", "/c", command])
 })
 
 test.each([

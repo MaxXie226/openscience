@@ -191,7 +191,12 @@ export namespace Shell {
   export function invocation(shell: string, command: string): string[] {
     switch (family(shell)) {
       case "cmd":
-        return ["/c", command]
+        // `/d /s /c`, the same shape Node uses for every Windows spawn. `/s`
+        // makes cmd strip exactly the first and last quote of the tail and take
+        // the rest verbatim, which is the only deterministic way to hand it a
+        // command containing quotes; `/d` skips AutoRun registry commands, so a
+        // sandboxed command cannot be prefixed by machine-local configuration.
+        return ["/d", "/s", "/c", command]
       case "powershell":
         return ["-NoProfile", "-Command", command]
       default:
