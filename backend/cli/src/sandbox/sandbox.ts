@@ -278,6 +278,13 @@ export namespace Sandbox {
     const b = backend()
     if (b === "seatbelt") return { platform: process.platform, backend: b, available: true, tool: "sandbox-exec" }
     if (b === "bubblewrap") return { platform: process.platform, backend: b, available: true, tool: "bwrap" }
+    // Widening `Backend` without widening this left `sandbox status` reporting
+    // "unavailable - no sandbox backend for platform win32" on a machine where
+    // `backend()` had already resolved to "appcontainer" and `sandbox test` was
+    // happily printing it. Two commands, same function, opposite answers.
+    if (b === "appcontainer") {
+      return { platform: process.platform, backend: b, available: true, tool: "AppContainer" }
+    }
     const reason =
       process.platform === "darwin"
         ? "sandbox-exec not found on PATH"
@@ -1193,21 +1200,32 @@ export namespace Sandbox {
     return line || undefined
   }
 
-  function runAsync(file: string, args: string[], cwd: string): Promise<{ status: number; stderr: string }> {
+  /** stdout is captured as well as stderr: the AppContainer check reads the
+   *  child's own token from `whoami /groups`, and a check that can only see
+   *  exit codes cannot tell "not confined" from "confined but permissive". */
+  function runAsync(
+    file: string,
+    args: string[],
+    cwd: string,
+  ): Promise<{ status: number; stdout: string; stderr: string }> {
     return new Promise((resolve) => {
-      const proc = spawn(file, args, { cwd, stdio: ["ignore", "ignore", "pipe"] })
+      const proc = spawn(file, args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
+      let stdout = ""
       let stderr = ""
+      proc.stdout?.on("data", (d) => {
+        stdout += d.toString()
+      })
       proc.stderr?.on("data", (d) => {
         stderr += d.toString()
       })
       const timer = setTimeout(() => proc.kill("SIGKILL"), 15000)
       proc.once("exit", (code) => {
         clearTimeout(timer)
-        resolve({ status: code ?? 1, stderr })
+        resolve({ status: code ?? 1, stdout, stderr })
       })
       proc.once("error", (err) => {
         clearTimeout(timer)
-        resolve({ status: 1, stderr: String(err) })
+        resolve({ status: 1, stdout, stderr: String(err) })
       })
     })
   }
@@ -1234,6 +1252,34 @@ export namespace Sandbox {
     }
 
     try {
+      // Windows first, because every other check below is meaningless if this
+      // one fails. A child that never entered the container looks EXACTLY like
+      // a container with no policy applied: writes escape and the network
+      // works. `whoami /groups` prints the token's groups, and an AppContainer
+      // token carries its package SID — so this separates "the launcher did not
+      // confine it" from "it is confined and the policy is wrong", which is the
+      // difference between debugging CreateProcess and debugging the spec.
+      if (b === "appcontainer") {
+        const token = await run("whoami /groups", "allow")
+        const confined = /S-1-15-2-/.test(token.stdout)
+        checks.push({
+          name: "the child actually runs inside the AppContainer",
+          pass: confined,
+          detail: confined
+            ? undefined
+            : "no package SID in the child's token: CreateProcess succeeded but SECURITY_CAPABILITIES did not take effect, so nothing below is contained",
+        })
+        if (!confined) {
+          checks.push({
+            name: "write outside the workspace is blocked",
+            pass: false,
+            skipped: true,
+            detail: "inconclusive - the child is not in a container",
+          })
+          return { backend: b, available: true, checks, ok: false }
+        }
+      }
+
       const inside = await run(`printf hi > "${work}/probe" && cat "${work}/probe"`, "allow")
       const insideOk = inside.status === 0
       checks.push({

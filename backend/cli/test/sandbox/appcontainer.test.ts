@@ -121,3 +121,35 @@ test("the entry point is wired before anything else parses argv", async () => {
   expect(at).toBeGreaterThan(-1)
   expect(at).toBeLessThan(source.indexOf('process.on("unhandledRejection"'))
 })
+
+test("describe() reports the appcontainer backend as available", () => {
+  // Two commands reading the same backend() disagreed on a real Windows
+  // machine: `sandbox status` printed "unavailable - no sandbox backend for
+  // platform win32" while `sandbox test` printed "Sandbox self-test
+  // (appcontainer)" and ran checks. describe() had a seatbelt/bubblewrap
+  // whitelist, so widening the Backend type without widening it here made the
+  // new backend fall through to the "none" branch.
+  const source = Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname)
+  return source.text().then((text) => {
+    const body = text.slice(text.indexOf("export function describe()"), text.indexOf("writable-path assembly"))
+    expect(body.includes('b === "appcontainer"')).toBe(true)
+    expect(body.includes('tool: "AppContainer"')).toBe(true)
+  })
+})
+
+test("the self-test proves the child is in a container before judging containment", async () => {
+  // A child that never entered the container is indistinguishable from a
+  // container with no policy: writes escape and the network works, which is
+  // exactly what the first Windows run reported. Reading the child's own token
+  // separates "CreateProcess did not confine it" from "it is confined and the
+  // policy is wrong" — different bugs, in different files.
+  const text = await Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname).text()
+  // Sliced forward from selfTest, not to runAsync: runAsync is defined ABOVE
+  // it, so that range was empty and the assertions passed on nothing.
+  const body = text.slice(text.indexOf("export async function selfTest"))
+  expect(body.includes("whoami /groups")).toBe(true)
+  expect(body.includes("S-1-15-2-")).toBe(true)
+  // And it must run FIRST, so a false "containment failed" is never reported
+  // when the real fault is upstream of the policy.
+  expect(body.indexOf("whoami /groups")).toBeLessThan(body.indexOf("write inside the workspace succeeds"))
+})
