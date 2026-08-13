@@ -1316,7 +1316,13 @@ export namespace Sandbox {
                 silent
                   ? `the child produced no output at all (exit ${token.status}), so its token could not be read`
                   : "the child ran but its token carries no package SID, so SECURITY_CAPABILITIES did not take effect",
-                firstLine(token.stderr),
+                // OPENSCIENCE_SANDBOX_DEBUG=1 keeps the launcher's whole dump
+                // instead of its first line: when containment fails for real,
+                // the intermediate Win32 values are the entire diagnosis, and
+                // one line of them is worth nothing.
+                process.env["OPENSCIENCE_SANDBOX_DEBUG"] === "1"
+                  ? `\n${token.stderr.trim()}`
+                  : firstLine(token.stderr),
               ]
                 .filter(Boolean)
                 .join(": "),

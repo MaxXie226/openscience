@@ -266,3 +266,30 @@ test("a path that is already writable is not re-granted as read-only", () => {
     "readable.filter((p) => !writable.includes(p))",
   )
 })
+
+test("the launcher can dump every value CreateProcess is given", async () => {
+  // `sandbox test` proved the child runs unconfined: CreateProcess succeeds, the
+  // command executes, and the token carries no package SID. The probe ran this
+  // same sequence successfully in PowerShell on the same machine, so the fault
+  // is in what we hand the kernel. Each guess at that cost a full rebuild cycle,
+  // which is why the values are now dumpable in one run.
+  const source = await Bun.file(new URL("../../src/sandbox/appcontainer.ts", import.meta.url).pathname).text()
+  const body = source.slice(source.indexOf("export function launch"))
+  expect(body).toContain("OPENSCIENCE_SANDBOX_DEBUG")
+  // The four values that can each independently cause a silent no-op: the SID,
+  // the struct handed to UpdateProcThreadAttribute, cb, and the list pointer.
+  for (const value of ["capabilities ", "startupinfoex ", "cb=", "lpAttributeList=0x"]) expect(body).toContain(value)
+})
+
+test("the FFI bindings are opened once and held", async () => {
+  // dlopen returns a library object that owns the handle; keeping only .symbols
+  // left it garbage, and Bun closes a library when that object is collected —
+  // unmapping code a later call jumps into. main() bound three times per launch
+  // and launch() opened advapi32 a fourth.
+  const source = await Bun.file(new URL("../../src/sandbox/appcontainer.ts", import.meta.url).pathname).text()
+  expect(source).toContain("libs: [userenv, advapi, kernel]")
+  expect(source).toContain("bound ??= open()")
+  // advapi32 must not be reopened inside launch().
+  const body = source.slice(source.indexOf("export function launch"))
+  expect(body).not.toContain("dlopen")
+})

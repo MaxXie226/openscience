@@ -90,26 +90,41 @@ export namespace AppContainer {
   const ALREADY_EXISTS = 0x800700b7
   const INFINITE = 0xffffffff
 
-  type Bound = ReturnType<typeof bind>
+  type Bound = ReturnType<typeof open>
 
-  function bind() {
+  /**
+   * Bound once per process, and kept.
+   *
+   * `dlopen` returns a library object that owns the handle; only `.symbols` was
+   * being kept, so the object was immediately garbage. Bun closes a library when
+   * that object is collected, which would unmap the very code a later call jumps
+   * into. `main` binds three times over one launch (ensureProfile, grant, launch)
+   * and `launch` opened advapi32 a fourth time, so there was ample opportunity.
+   * Caching removes the question entirely rather than reasoning about GC timing.
+   */
+  let bound: Bound | undefined
+  function bind(): Bound {
+    bound ??= open()
+    return bound
+  }
+
+  function open() {
     if (process.platform !== "win32") throw new Error("the AppContainer launcher only runs on Windows")
     // Required lazily and by name so `bun:ffi` never enters the module graph on
     // platforms that cannot call this. These DLLs ship with Windows, so nothing
     // additional is distributed.
     const ffi = require("bun:ffi") as typeof import("bun:ffi")
     const t = ffi.FFIType
-    return {
-      ffi,
-      userenv: ffi.dlopen("userenv.dll", {
-        CreateAppContainerProfile: { args: [t.ptr, t.ptr, t.ptr, t.ptr, t.u32, t.ptr], returns: t.i32 },
-        DeriveAppContainerSidFromAppContainerName: { args: [t.ptr, t.ptr], returns: t.i32 },
-      }).symbols,
-      advapi: ffi.dlopen("advapi32.dll", {
-        ConvertSidToStringSidW: { args: [t.ptr, t.ptr], returns: t.bool },
-        FreeSid: { args: [t.ptr], returns: t.ptr },
-      }).symbols,
-      kernel: ffi.dlopen("kernel32.dll", {
+    const userenv = ffi.dlopen("userenv.dll", {
+      CreateAppContainerProfile: { args: [t.ptr, t.ptr, t.ptr, t.ptr, t.u32, t.ptr], returns: t.i32 },
+      DeriveAppContainerSidFromAppContainerName: { args: [t.ptr, t.ptr], returns: t.i32 },
+    })
+    const advapi = ffi.dlopen("advapi32.dll", {
+      ConvertSidToStringSidW: { args: [t.ptr, t.ptr], returns: t.bool },
+      ConvertStringSidToSidW: { args: [t.ptr, t.ptr], returns: t.bool },
+      FreeSid: { args: [t.ptr], returns: t.ptr },
+    })
+    const kernel = ffi.dlopen("kernel32.dll", {
         LocalFree: { args: [t.ptr], returns: t.ptr },
         GetLastError: { args: [], returns: t.u32 },
         GetStdHandle: { args: [t.u32], returns: t.ptr },
@@ -124,8 +139,10 @@ export namespace AppContainer {
         WaitForSingleObject: { args: [t.ptr, t.u32], returns: t.u32 },
         GetExitCodeProcess: { args: [t.ptr, t.ptr], returns: t.bool },
         CloseHandle: { args: [t.ptr], returns: t.bool },
-      }).symbols,
-    }
+    })
+    // The library objects are returned, not just their symbols, so they stay
+    // reachable for the life of the process.
+    return { ffi, libs: [userenv, advapi, kernel], userenv: userenv.symbols, advapi: advapi.symbols, kernel: kernel.symbols }
   }
 
   /**
@@ -292,22 +309,36 @@ export namespace AppContainer {
    */
   export function launch(sid: string, argv: string[], b: Bound = bind()): number {
     const { ffi, advapi, kernel } = b
+    // Set OPENSCIENCE_SANDBOX_DEBUG=1 to dump every intermediate value.
+    //
+    // `sandbox test` has now proved the child runs UNCONFINED: CreateProcess
+    // succeeds, the command executes, and the token carries no package SID. The
+    // probe ran this same sequence successfully in PowerShell on the same
+    // machine, so the difference is in what we hand the kernel, not in what the
+    // kernel supports. Guessing at that across a rebuild cycle each time has
+    // been the expensive part; this makes one run answer it.
+    const debug = process.env["OPENSCIENCE_SANDBOX_DEBUG"] === "1"
+    const say = (line: string) => {
+      if (debug) process.stderr.write(`openscience[appcontainer] ${line}\n`)
+    }
+    const bytes = (view: Uint8Array) => Buffer.from(view).toString("hex")
+    const keep: unknown[] = []
+
     const sidBuf = new BigUint64Array(1)
-    // ConvertStringSidToSidW is bound here rather than in `bind()` so the
-    // launcher's read-only surface stays small; the SID text came from us.
-    const convert = ffi.dlopen("advapi32.dll", {
-      ConvertStringSidToSidW: { args: [ffi.FFIType.ptr, ffi.FFIType.ptr], returns: ffi.FFIType.bool },
-    }).symbols
-    if (!convert.ConvertStringSidToSidW(ffi.ptr(wide(sid)), ffi.ptr(sidBuf))) {
+    // ConvertStringSidToSidW comes from the cached binding now. Opening
+    // advapi32 a second time here left a library object nothing referenced.
+    if (!advapi.ConvertStringSidToSidW(ffi.ptr(wide(sid)), ffi.ptr(sidBuf))) {
       throw new Error(`ConvertStringSidToSid failed for ${sid}: Win32 ${kernel.GetLastError()}`)
     }
     const sidPtr = ffi.read.ptr(ffi.ptr(sidBuf), 0)
+    say(`sid ${sid} -> 0x${(sidPtr as number).toString(16)}`)
 
     // Size the attribute list, then allocate and initialise it. The first call
     // is expected to fail with ERROR_INSUFFICIENT_BUFFER; only the size matters.
     const sizeOut = new BigUint64Array(1)
     kernel.InitializeProcThreadAttributeList(null, 1, 0, ffi.ptr(sizeOut))
     const listSize = Number(sizeOut[0]!)
+    say(`attribute list size ${listSize}`)
     if (!listSize) throw new Error("InitializeProcThreadAttributeList reported a zero-length attribute list")
     const attributes = new Uint8Array(listSize)
     if (!kernel.InitializeProcThreadAttributeList(ffi.ptr(attributes), 1, 0, ffi.ptr(sizeOut))) {
@@ -318,6 +349,15 @@ export namespace AppContainer {
     new DataView(capabilities.buffer).setBigUint64(0, BigInt(sidPtr as number), true)
     // Capabilities pointer stays null and CapabilityCount stays 0 — that is the
     // containment.
+    //
+    // These two buffers must outlive the call: UpdateProcThreadAttribute stores
+    // a POINTER to `capabilities` inside `attributes`, and does not copy it, so
+    // the value has to still be there when CreateProcess reads the list. C# uses
+    // AllocHGlobal for exactly this reason. Holding both in `keep` makes the
+    // lifetime explicit rather than relying on them merely still being in scope.
+    keep.push(attributes, capabilities, sidBuf)
+    say(`capabilities ${bytes(capabilities)}`)
+    say(`attributes at 0x${(ffi.ptr(attributes) as number).toString(16)}`)
 
     if (
       !kernel.UpdateProcThreadAttribute(
@@ -378,6 +418,17 @@ export namespace AppContainer {
     const info = new Uint8Array(PROCESS_INFORMATION_SIZE)
     // Mutable: CreateProcessW may write into lpCommandLine.
     const line = wide(commandLine(argv))
+    keep.push(startup, info, line)
+    // The whole STARTUPINFOEX as the kernel will read it. cb must be 0x70 (112)
+    // in the first four bytes, and the attribute-list pointer must be non-zero
+    // at offset 104 — if either is wrong, CreateProcess ignores the list and
+    // succeeds anyway, which is precisely the failure being chased.
+    say(`startupinfoex ${bytes(startup)}`)
+    say(`  cb=${new DataView(startup.buffer).getUint32(STARTUPINFO_CB_OFFSET, true)} (expect ${STARTUPINFOEX_SIZE})`)
+    say(
+      `  lpAttributeList=0x${new DataView(startup.buffer).getBigUint64(STARTUPINFO_ATTRIBUTE_LIST_OFFSET, true).toString(16)}`,
+    )
+    say(`commandline ${commandLine(argv)}`)
 
     const ok = kernel.CreateProcessW(
       null,
@@ -393,7 +444,11 @@ export namespace AppContainer {
       ffi.ptr(startup),
       ffi.ptr(info),
     )
+    say(`CreateProcessW -> ${ok} (Win32 ${ok ? 0 : kernel.GetLastError()})`)
+    // Only now is the attribute list dead. Referenced here so nothing above can
+    // be considered unreachable while the kernel still holds pointers into it.
     kernel.DeleteProcThreadAttributeList(ffi.ptr(attributes))
+    keep.length = 0
     if (!ok) {
       throw new Error(
         `CreateProcess into the AppContainer failed: Win32 ${kernel.GetLastError()}. ` +
