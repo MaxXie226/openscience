@@ -83,7 +83,6 @@ export namespace AppContainer {
 
   const PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
   const EXTENDED_STARTUPINFO_PRESENT = 0x00080000
-  const CREATE_UNICODE_ENVIRONMENT = 0x00000400
   /** HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS). The profile is per-user state
    *  that outlives a run by design, so this is the ordinary path. */
   const ALREADY_EXISTS = 0x800700b7
@@ -374,7 +373,9 @@ export namespace AppContainer {
       null,
       null,
       true,
-      EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+      // No CREATE_UNICODE_ENVIRONMENT: lpEnvironment below is null, so the child
+      // inherits ours and the flag would describe a block never supplied.
+      EXTENDED_STARTUPINFO_PRESENT,
       null,
       null,
       ffi.ptr(startup),
@@ -384,7 +385,13 @@ export namespace AppContainer {
     if (!ok) {
       throw new Error(
         `CreateProcess into the AppContainer failed: Win32 ${kernel.GetLastError()}. ` +
-          `Win32 5 is access denied; 2 means the executable was not found.`,
+          `Win32 5 is access denied; 2 means the executable was not found; ` +
+          // 203 was the one actually hit on a real machine, and it was not in
+          // this list, so the number carried no meaning at the point of failure.
+          // lpApplicationName is null, so Windows resolves argv[0] itself and
+          // needs an environment to do it in.
+          `203 is ERROR_ENVVAR_NOT_FOUND, which points at the environment this ` +
+          `process was given rather than at the command.`,
       )
     }
 

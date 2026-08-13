@@ -161,3 +161,20 @@ test("nothing printed on a backend-less machine carries non-ASCII", async () => 
   // eslint-disable-next-line no-control-regex
   expect(printed).not.toMatch(/[^\x00-\x7F]/)
 })
+
+test("sandbox status does not claim containment it has not verified", async () => {
+  // It printed "are confined to the workspace" on a Windows run whose very next
+  // command, `sandbox test`, failed containment. A backend being AVAILABLE is not
+  // the same as it working, and status runs nothing that could tell the
+  // difference, so it must report only what it knows.
+  const source = await Bun.file(new URL("../../src/cli/cmd/sandbox.ts", import.meta.url).pathname).text()
+  // Comments are not code: this asserts the flag is not USED, and the comment
+  // explaining why it was removed must not trip it.
+  const code = source
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join("\n")
+  expect(code).not.toContain('"are confined to the workspace"')
+  expect(code).toContain("are launched through")
+  expect(code).toContain("sandbox test")
+})

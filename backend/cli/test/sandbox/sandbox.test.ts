@@ -1191,3 +1191,57 @@ describe("Sandbox on win32 (AppContainer composition)", () => {
     expect(usable.includes("return false")).toBe(true)
   })
 })
+
+describe("Sandbox.plan on win32", () => {
+  // The win32 describe above only ever exercised wrapArgv, so nothing asserted
+  // what plan() composes — which is where the shell flag lives, and where the
+  // bug that made every Windows command a no-op survived.
+  const base = {
+    cwd: "C:\\work\\project",
+    workspace: ["C:\\work\\project"],
+    options: { enabled: true, network: "deny" as const },
+    platform: "win32" as const,
+  }
+
+  test("a cmd.exe shell is invoked with /c, never -c", () => {
+    const p = Sandbox.plan({ ...base, command: "whoami /groups", shell: "C:\\Windows\\system32\\cmd.exe" })
+    // The launcher argv is: openscience __appcontainer-launch <spec> -- <shell> /c <cmd>
+    const tail = p.args!.slice(p.args!.indexOf("--") + 1)
+    expect(tail[1]).toBe("/c")
+    expect(tail).not.toContain("-c")
+    expect(tail[2]).toBe("whoami /groups")
+  })
+
+  test("a Git Bash shell still gets -c", () => {
+    // Shell.fallback() prefers Git Bash over cmd on Windows, so both shapes are
+    // reachable on the same platform and the flag cannot key off the platform.
+    const p = Sandbox.plan({ ...base, command: "echo hi", shell: "C:\\Program Files\\Git\\bin\\bash.exe" })
+    const tail = p.args!.slice(p.args!.indexOf("--") + 1)
+    expect(tail[1]).toBe("-c")
+  })
+
+  test("no POSIX temp path reaches the writable spec", () => {
+    // "/tmp" resolves to "C:\tmp" on Windows, which does not exist, so icacls
+    // failed on it and every sandboxed command carried a grant warning on its
+    // stderr — burying the real errors under it.
+    const p = Sandbox.plan({ ...base, command: "echo hi", shell: "cmd.exe" })
+    const spec = JSON.parse(Buffer.from(p.args![1]!, "base64").toString("utf8"))
+    // On a Windows host "/tmp" resolves to "C:\tmp"; asserting the absence of
+    // "/tmp" itself would only pass here by accident, because this Linux box's
+    // own os.tmpdir() IS "/tmp" and legitimately belongs in the list.
+    expect(spec.writable.some((w: string) => /^[A-Za-z]:\\tmp$/i.test(w))).toBe(false)
+  })
+})
+
+test("tempDirs adds POSIX literals only on POSIX", () => {
+  // The host always contributes its own temp dir, and on this Linux box that is
+  // "/tmp" — so the property under test is that win32 adds NOTHING beyond what
+  // the environment reported, which holds whatever machine runs the suite.
+  const host = new Set([process.env["TMPDIR"], process.env["TMP"], process.env["TEMP"], os.tmpdir()].filter(Boolean))
+  expect(Sandbox.tempDirs("win32").every((d) => host.has(d))).toBe(true)
+  expect(Sandbox.tempDirs("linux")).toContain("/tmp")
+  // "/private/tmp" is never the host's tmpdir here, so it discriminates cleanly.
+  expect(Sandbox.tempDirs("darwin")).toContain("/private/tmp")
+  expect(Sandbox.tempDirs("linux")).not.toContain("/private/tmp")
+  expect(Sandbox.tempDirs("win32")).not.toContain("/private/tmp")
+})

@@ -297,7 +297,7 @@ export namespace Sandbox {
   // ── writable-path assembly ──────────────────────────────────────────────────
 
   /** Temp dirs a sandboxed command legitimately needs to write to. */
-  export function tempDirs(): string[] {
+  export function tempDirs(platform: NodeJS.Platform = process.platform): string[] {
     const dirs = new Set<string>()
     const add = (d?: string | null) => {
       if (d) dirs.add(d)
@@ -306,8 +306,13 @@ export namespace Sandbox {
     add(process.env.TMP)
     add(process.env.TEMP)
     add(os.tmpdir())
-    add("/tmp")
-    if (process.platform === "darwin") add("/private/tmp")
+    // POSIX-only. On Windows `path.resolve("/tmp")` yields `C:\tmp`, which does
+    // not exist on a normal machine, and it reached the AppContainer writable
+    // spec — so `icacls` failed on it and EVERY sandboxed command carried
+    // "could not grant sandbox access to C:\tmp" on its stderr. Harmless in
+    // itself, but it buried the real errors underneath it.
+    if (platform !== "win32") add("/tmp")
+    if (platform === "darwin") add("/private/tmp")
     return [...dirs]
   }
 
@@ -389,10 +394,13 @@ export namespace Sandbox {
     unreadable?: string[]
     options: Options
     backend: Backend
+    /** Defaults to the real platform; passed explicitly so the Windows policy
+     *  is reachable from a Linux test, the way `plan`/`wrapArgv` already are. */
+    platform?: NodeJS.Platform
   }): Policy {
     const candidates = dedupe([
       ...input.workspace,
-      ...tempDirs(),
+      ...tempDirs(input.platform ?? process.platform),
       ...(input.options.allowWrite ?? []),
       ...(input.extraWritable ?? []),
     ])
@@ -1088,7 +1096,7 @@ export namespace Sandbox {
     if (b === "none") {
       return { file: input.command, useShell: input.shell, sandboxed: false, backend: "none", warning }
     }
-    const policy = buildPolicy({ workspace: input.workspace, options: input.options!, backend: b })
+    const policy = buildPolicy({ workspace: input.workspace, options: input.options!, backend: b, platform })
     // Bubblewrap's loopback shim bridges a bind-mounted unix socket that only
     // exists inside its own network namespace. Seatbelt has no namespace, so
     // there is nothing to bridge and no shim to compose — the sandboxed
@@ -1102,10 +1110,17 @@ export namespace Sandbox {
           port: SHIM_PORT,
           socket: policy.egress!,
           file: input.shell,
-          args: ["-c", input.command],
+          args: Shell.invocation(input.shell, input.command),
         })
       : undefined
-    const argv = shim ? ["/bin/sh", "-c", shim] : [input.shell, "-c", input.command]
+    // Shell.invocation, not a hardcoded "-c": on Windows the shell is usually
+    // cmd.exe, which takes /c and reads -c as "start interactive". Given -c it
+    // printed its banner and a prompt, ran nothing, and exited 0 — so every
+    // sandboxed command silently did nothing, and the self-test read the banner
+    // as a process token. The shim branch is bubblewrap-only and so always
+    // POSIX, but it goes through the same helper rather than keeping a second
+    // copy of this knowledge, which is how the bug survived in the first place.
+    const argv = shim ? ["/bin/sh", "-c", shim] : [input.shell, ...Shell.invocation(input.shell, input.command)]
     const s = specForArgv(
       argv,
       shimmed ? { ...policy, readBind: [...(policy.readBind ?? []), ...shimmed.bind] } : policy,
@@ -1161,6 +1176,7 @@ export namespace Sandbox {
       unreadable: input.unreadable,
       options: input.options!,
       backend: b,
+      platform,
     })
     // Only bubblewrap's --unshare-net + --bind gives the shim anything to
     // bridge: seatbelt has no namespace, so there is nothing to bridge and no

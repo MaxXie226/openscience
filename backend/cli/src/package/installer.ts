@@ -68,8 +68,12 @@ export namespace Installer {
   const which = (name: string) => {
     const found = Bun.which(name)
     if (!found) return undefined
-    const proc = Bun.spawnSync([found, "--version"], { stdout: "ignore", stderr: "ignore" })
-    return proc.exitCode === 0 ? found : undefined
+    try {
+      const proc = Bun.spawnSync([found, "--version"], { stdout: "ignore", stderr: "ignore" })
+      return proc.exitCode === 0 ? found : undefined
+    } catch {
+      return undefined
+    }
   }
 
   /**
@@ -105,11 +109,20 @@ export namespace Installer {
     "'platform':sysconfig.get_platform(),'purelib':sysconfig.get_paths()['purelib'],'prefix':sys.prefix}))"
 
   export async function inspect(binary: string): Promise<Report | undefined> {
-    const proc = Bun.spawn([binary, "-c", PROBE], { stdout: "pipe", stderr: "ignore" })
-    const out = await new Response(proc.stdout).text()
-    await proc.exited
-    if (proc.exitCode !== 0) return undefined
-    return JSON.parse(out.trim())
+    // Every failure mode of a candidate must answer "not usable", never throw.
+    // spawn throws outright on a file that exists but is not executable, and
+    // PATH is full of those; JSON.parse throws on a candidate that runs but
+    // prints something else. Either would abort the whole search at the first
+    // bad entry rather than moving on to the next one.
+    try {
+      const proc = Bun.spawn([binary, "-c", PROBE], { stdout: "pipe", stderr: "ignore" })
+      const out = await new Response(proc.stdout).text()
+      await proc.exited
+      if (proc.exitCode !== 0) return undefined
+      return JSON.parse(out.trim())
+    } catch {
+      return undefined
+    }
   }
 
   /**

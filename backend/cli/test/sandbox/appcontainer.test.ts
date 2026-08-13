@@ -197,3 +197,21 @@ test("the containment check distinguishes a silent child from an uncontained one
   // eslint-disable-next-line no-control-regex
   expect(printed).not.toMatch(/[^\x00-\x7F]/)
 })
+
+test("the CreateProcess failure explains 203, the code a real machine returned", async () => {
+  // The hint listed Win32 5 and 2. The machine returned 203, so at the moment of
+  // failure the number carried no meaning at all. 203 is ERROR_ENVVAR_NOT_FOUND,
+  // which points at the environment rather than the command — lpApplicationName
+  // is null, so Windows resolves argv[0] itself and needs an environment to do
+  // it in.
+  const source = await Bun.file(new URL("../../src/sandbox/appcontainer.ts", import.meta.url).pathname).text()
+  expect(source).toContain("203 is ERROR_ENVVAR_NOT_FOUND")
+  // Comments are not code: this asserts the flag is not USED, and the comment
+  // explaining why it was removed must not trip it.
+  const code = source
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join("\n")
+  // And the flag that described an environment block we never supply is gone.
+  expect(code).not.toContain("CREATE_UNICODE_ENVIRONMENT")
+})

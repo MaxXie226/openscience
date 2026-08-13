@@ -212,8 +212,25 @@ interface RawPayload {
  */
 export async function findPython(override?: string, environment?: string): Promise<string> {
   if (environment) {
+    // Run it, don't just stat it — the same check the PATH candidates below have
+    // always used. A venv's `Scripts\python.exe` on Windows is a REDIRECTOR that
+    // resolves its base interpreter from `pyvenv.cfg` at startup; when that
+    // resolution fails the file still exists, so an existence check hands the
+    // kernel a binary that cannot start. The observable was the redirector's own
+    // message, `No Python at '...'`, surfacing from a kernel-startup failure with
+    // nothing to connect it to the environment that produced it.
     const bin = Installer.interpreter(environment)
-    if (await Bun.file(bin).exists()) return bin
+    if (await Bun.file(bin).exists()) {
+      // try/catch, not just an exit-code check: spawn THROWS on a file that
+      // exists but is not executable (EACCES), so a bare check would replace a
+      // broken environment with a crash. The candidate loop below has always
+      // been wrapped for the same reason.
+      try {
+        const proc = Bun.spawn([bin, "--version"], { stdout: "ignore", stderr: "ignore" })
+        await proc.exited
+        if (proc.exitCode === 0) return bin
+      } catch {}
+    }
   }
   const candidates = override ? [override] : ["python3", "python"]
   for (const bin of candidates) {

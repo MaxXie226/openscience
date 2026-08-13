@@ -23,10 +23,15 @@ function printStatus(config?: Config.Sandbox) {
   // the workspace" on a machine where `Sandbox.backend()` is "none" and nothing
   // confines anything — a false statement about a security property, which is
   // the worst kind of wrong thing for this command to print.
+  // Then it printed "are confined to the workspace" on a Windows run whose
+  // `sandbox test` failed containment in the very next command. A backend being
+  // AVAILABLE is not the same as it working, and this command does not run the
+  // commands that would tell the difference — so it now reports what it actually
+  // knows (which backend is applied) and names the command that can prove it.
   const effect = !enabled
     ? "run with full user authority"
     : d.available
-      ? "are confined to the workspace"
+      ? `are launched through ${d.tool ?? d.backend} - run 'openscience sandbox test' to verify containment`
       : "are NOT confined here: no backend on this platform"
   UI.println(
     `  status    ${enabled ? `${S.TEXT_SUCCESS_BOLD}enabled` : `${S.TEXT_DIM}disabled`}${S.TEXT_NORMAL}` +
