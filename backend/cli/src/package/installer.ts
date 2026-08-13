@@ -21,7 +21,7 @@ import { Sandbox } from "../sandbox/sandbox"
  * precedent: `compute/modal/volume.ts:112-116`.
  */
 export namespace Installer {
-  export type Tool = { kind: "existing" | "uv" | "venv"; binary: string }
+  export type Tool = { kind: "existing" | "uv" | "venv"; binary: string; report?: Report }
 
   const bindir = process.platform === "win32" ? "Scripts" : "bin"
   const exe = process.platform === "win32" ? ".exe" : ""
@@ -50,7 +50,7 @@ export namespace Installer {
   }
 
   /**
-   * An interpreter on PATH that actually runs.
+   * A tool on PATH that actually runs.
    *
    * `Bun.which` alone is not enough, and Windows is where that bites. A default
    * install has `python3.exe` and `python.exe` in `WindowsApps` as App
@@ -73,6 +73,128 @@ export namespace Installer {
   }
 
   /**
+   * EVERY match for a bare name on PATH, in PATH order — not just the first.
+   *
+   * `Bun.which` answers once, so a single unusable early hit hides every valid
+   * interpreter behind it and the search ends there. Both Windows failures seen
+   * so far have this shape: a `WindowsApps` alias early on PATH, and an MSYS2
+   * build ahead of a real python.org install. Rejecting a candidate has to mean
+   * "keep looking", not "give up".
+   */
+  async function onPath(name: string) {
+    const out: string[] = []
+    const seen = new Set<string>()
+    for (const dir of (process.env["PATH"] ?? "").split(path.delimiter).filter(Boolean)) {
+      const full = path.join(dir, name)
+      const key = process.platform === "win32" ? full.toLowerCase() : full
+      if (seen.has(key)) continue
+      seen.add(key)
+      if (await Bun.file(full).exists()) out.push(full)
+    }
+    return out
+  }
+
+  export type Report = { exe: string; version: number[]; platform: string; purelib: string; prefix: string }
+
+  /** One round trip that answers everything worth knowing about a candidate.
+   *  `sysconfig` is the authority on the layout it will produce, so we ask it
+   *  rather than inferring the layout from `process.platform`. */
+  const PROBE =
+    "import sys,sysconfig,json;print(json.dumps({" +
+    "'exe':sys.executable,'version':list(sys.version_info[:2])," +
+    "'platform':sysconfig.get_platform(),'purelib':sysconfig.get_paths()['purelib'],'prefix':sys.prefix}))"
+
+  export async function inspect(binary: string): Promise<Report | undefined> {
+    const proc = Bun.spawn([binary, "-c", PROBE], { stdout: "pipe", stderr: "ignore" })
+    const out = await new Response(proc.stdout).text()
+    await proc.exited
+    if (proc.exitCode !== 0) return undefined
+    return JSON.parse(out.trim())
+  }
+
+  /**
+   * Why this interpreter cannot build an environment the rest of the module can
+   * use — or undefined if it can.
+   *
+   * The case this exists for, measured on a real Windows machine: PATH had no
+   * `python3.exe` until `C:\msys64\mingw64\bin`, so MSYS2's MinGW Python won,
+   * and MSYS2 is the one Windows-native build that patches `sysconfig` to the
+   * POSIX scheme. It created a perfectly valid environment at
+   * `<env>/lib/python3.9/site-packages` with `<env>/bin/python.exe`, while
+   * every other path in this module looks under `Scripts\`. `python -m venv`
+   * exited 0 and `ensurepip` genuinely ran, so nothing upstream could tell.
+   *
+   * Checking the scheme rather than only the vendor is what makes this general:
+   * it disqualifies Cygwin and any future cross-built oddity by the property
+   * that actually breaks us, before anything is written to disk. The vendor
+   * check runs first only because it produces the clearer sentence.
+   */
+  export function reject(report: Report): string | undefined {
+    if (process.platform !== "win32") return undefined
+    if (/[\\/](msys\d*|mingw\d*|clang\d*|cygwin\d*)[\\/]/i.test(report.exe))
+      return `${report.exe} is an MSYS2/Cygwin build, which lays environments out with the POSIX scheme`
+    if (!report.platform.startsWith("win-"))
+      return `${report.exe} reports platform ${report.platform}, not a native win-* build`
+    if (!/[\\/]Lib[\\/]site-packages$/i.test(report.purelib))
+      return `${report.exe} uses the POSIX layout (${report.purelib}) rather than Lib\\site-packages`
+    return undefined
+  }
+
+  /**
+   * The first interpreter on PATH that passes `reject`, plus the reasons the
+   * ones before it did not — so a failure can say what it looked at.
+   *
+   * `python` before `python3` on Windows is deliberate and is the fix for the
+   * MSYS2 selection above. python.org ships `python.exe` and NO `python3.exe`,
+   * so on Windows `python3` resolves to either the Store alias or a POSIX
+   * flavoured distribution almost by definition. On every other platform the
+   * usual order holds, where `python` may still be Python 2.
+   *
+   * The `py` launcher is consulted first where it exists, being the authoritative
+   * registry of installed interpreters — but it is only a source of candidates,
+   * never a requirement: it was absent on the very machine this bug came from.
+   */
+  export async function select() {
+    const rejected: string[] = []
+    const names = process.platform === "win32" ? ["python.exe", "python3.exe"] : ["python3", "python"]
+    const candidates: string[] = []
+    if (process.platform === "win32") candidates.push(...(await registered()))
+    for (const name of names) candidates.push(...(await onPath(name)))
+    const seen = new Set<string>()
+    for (const candidate of candidates) {
+      const key = process.platform === "win32" ? candidate.toLowerCase() : candidate
+      if (seen.has(key)) continue
+      seen.add(key)
+      const report = await inspect(candidate)
+      if (!report) {
+        rejected.push(`${candidate} did not run (a Microsoft Store alias behaves this way)`)
+        continue
+      }
+      const why = reject(report)
+      if (why) {
+        rejected.push(why)
+        continue
+      }
+      return { binary: candidate, report, rejected }
+    }
+    return { binary: undefined, report: undefined, rejected }
+  }
+
+  /** Interpreters the `py` launcher knows about. Absent launcher is normal. */
+  async function registered() {
+    const py = Bun.which("py")
+    if (!py) return []
+    const proc = Bun.spawn([py, "-0p"], { stdout: "pipe", stderr: "ignore" })
+    const out = await new Response(proc.stdout).text()
+    await proc.exited
+    if (proc.exitCode !== 0) return []
+    return out
+      .split("\n")
+      .map((line) => line.match(/(\S:\\.*python(?:w)?\.exe)/i)?.[1])
+      .filter((found): found is string => Boolean(found))
+  }
+
+  /**
    * The ladder, in order: an existing environment wins over any tool, then uv,
    * then venv, then a remedy.
    *
@@ -85,15 +207,22 @@ export namespace Installer {
       .catch(() => false)
     if (existing) return { kind: "existing", binary: interpreter(directory) }
 
-    const uv = available ? available.uv : (Bun.which("uv") ?? undefined)
+    const uv = available ? available.uv : (which("uv") ?? undefined)
     if (uv) return { kind: "uv", binary: uv }
 
-    const python = available ? available.python : (which("python3") ?? which("python"))
-    if (python) return { kind: "venv", binary: python }
+    if (available?.python) return { kind: "venv", binary: available.python }
+    const chosen = available ? { binary: undefined, report: undefined, rejected: [] } : await select()
+    if (chosen.binary) return { kind: "venv", binary: chosen.binary, report: chosen.report }
 
     throw new Error(
       [
         "No way to create a Python environment on this machine.",
+        // What was looked at and why each one lost. Without this the message is
+        // indistinguishable on a machine with no Python at all and on one whose
+        // only Python is disqualified — two problems with different remedies.
+        ...(chosen.rejected.length
+          ? ["Interpreters were found, but none can build a usable environment:", ...chosen.rejected.map((r) => `  - ${r}`)]
+          : []),
         "Install one of:",
         "  - the venv module: `apt install python3-venv` on Debian/Ubuntu (most other distributions ship it with python3)",
         "  - uv: https://docs.astral.sh/uv/getting-started/installation/",
@@ -119,6 +248,16 @@ export namespace Installer {
    */
   export async function create(directory: string, tool: Tool) {
     if (tool.kind === "existing") return
+    // A tree left behind by a failed creation poisons every retry after it.
+    // `probe` only calls an environment "existing" when the interpreter is where
+    // this module expects it, so a half-built tree falls through to here — and
+    // both `venv` and `uv` then short-circuit on the directory already being
+    // there, report success, and replace nothing. Measured on Windows: after the
+    // first bad creation, every retry printed "Requirement already satisfied"
+    // for pip and setuptools and failed identically, with no way out but
+    // deleting the directory by hand. Reaching this line at all means the tree
+    // is unusable, so clear it.
+    await fs.rm(directory, { recursive: true, force: true }).catch(() => {})
     await fs.mkdir(path.dirname(directory), { recursive: true })
     // `--system-site-packages` is not a convenience, it repairs a cliff.
     //
@@ -151,19 +290,58 @@ export namespace Installer {
     // surfaced much later as "Executable not found in $PATH" from the install
     // step, naming a path with no hint as to why it was missing. Assert the
     // thing the rest of this module depends on, at the moment it should exist.
-    if (!(await Bun.file(interpreter(directory)).exists())) {
+    //
+    // Report what was MEASURED, never a guess at the cause. The previous
+    // version of this message asserted that Windows failures "usually mean" a
+    // Microsoft Store alias. On the machine that produced the next failure that
+    // claim was false — a real CPython had run and `ensurepip` had completed —
+    // and it cost a full debugging cycle, because the message read as a finding
+    // rather than as a hypothesis. Everything below is something we looked at.
+    const found = await locate(directory)
+    const check = found ? await inspect(found) : undefined
+    const rooted = check ? same(check.prefix, directory) : false
+    if (!found || !same(found, interpreter(directory)) || !rooted) {
+      const listing = await fs.readdir(directory).catch(() => [] as string[])
+      // Leave nothing behind for the next run to short-circuit on.
+      await fs.rm(directory, { recursive: true, force: true }).catch(() => {})
       throw new Error(
         [
-          `Creating the environment at ${directory} reported success but produced no interpreter at ${interpreter(directory)}.`,
-          process.platform === "win32"
-            ? "On Windows this usually means PATH resolves python to a Microsoft Store App Execution Alias rather than a real interpreter. Install Python from python.org, or turn the alias off under Settings > Apps > Advanced app settings > App execution aliases."
-            : "Install a working python3 with the venv module, or install uv.",
+          `Creating the environment at ${directory} reported success, but it has no usable interpreter at ${interpreter(directory)}.`,
+          `  created with: ${tool.binary} (exit code ${proc.exitCode})`,
+          tool.report ? `  which reports: platform ${tool.report.platform}, purelib ${tool.report.purelib}` : undefined,
+          found ? `  an interpreter was found instead at: ${found}` : "  no interpreter was found anywhere in the tree",
+          found && check && !rooted ? `  and it reports sys.prefix ${check.prefix}, not ${directory}` : undefined,
+          found && !check ? "  and it did not run" : undefined,
+          listing.length ? `  the tree contains: ${listing.join(", ")}` : "  the tree is empty",
           (err || out).trim(),
         ]
           .filter(Boolean)
           .join("\n"),
       )
     }
+  }
+
+  /** Compare two paths as the host filesystem would. */
+  const same = (a: string, b: string) => {
+    const [x, y] = [path.resolve(a), path.resolve(b)]
+    return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y
+  }
+
+  /**
+   * The interpreter a creation actually produced, searched across both layouts
+   * rather than assumed at one path.
+   *
+   * `interpreter()` names where this module REQUIRES the interpreter to be;
+   * this finds where it IS. The two differing is the whole diagnosis in the
+   * POSIX-layout case, so the error can only say so if it looks in both places.
+   */
+  export async function locate(directory: string) {
+    for (const dir of ["Scripts", "bin"])
+      for (const name of ["python.exe", "python3.exe", "python", "python3"]) {
+        const full = path.join(directory, dir, name)
+        if (await Bun.file(full).exists()) return full
+      }
+    return undefined
   }
 
   /**
