@@ -137,23 +137,6 @@ test("describe() reports the appcontainer backend as available", () => {
   })
 })
 
-test("the self-test proves the child is in a container before judging containment", async () => {
-  // A child that never entered the container is indistinguishable from a
-  // container with no policy: writes escape and the network works, which is
-  // exactly what the first Windows run reported. Reading the child's own token
-  // separates "CreateProcess did not confine it" from "it is confined and the
-  // policy is wrong" — different bugs, in different files.
-  const text = await Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname).text()
-  // Sliced forward from selfTest, not to runAsync: runAsync is defined ABOVE
-  // it, so that range was empty and the assertions passed on nothing.
-  const body = text.slice(text.indexOf("export async function selfTest"))
-  expect(body.includes("whoami /groups")).toBe(true)
-  expect(body.includes("S-1-15-2-")).toBe(true)
-  // And it must run FIRST, so a false "containment failed" is never reported
-  // when the real fault is upstream of the policy.
-  expect(body.indexOf("whoami /groups")).toBeLessThan(body.indexOf("write inside the workspace succeeds"))
-})
-
 test("the child inherits the launcher's std handles", async () => {
   // `bInheritHandles: false` with no STARTF_USESTDHANDLES was silently fatal:
   // the launcher runs with its stdout on a pipe, so a child inheriting nothing
@@ -174,28 +157,6 @@ test("the child inherits the launcher's std handles", async () => {
   // The flag must not be set without handles behind it, or the child gets no
   // stdout at all — the same failure by another route.
   expect(body.indexOf("if (stdout && stderr)")).toBeLessThan(body.indexOf("STARTF_USESTDHANDLES, true"))
-})
-
-test("the containment check distinguishes a silent child from an uncontained one", async () => {
-  // Same defect the installer's error message had: asserting one cause when
-  // two produce the identical observable.
-  const text = await Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname).text()
-  const body = text.slice(text.indexOf("export async function selfTest"))
-  const check = body.slice(body.indexOf("whoami /groups"), body.indexOf("write inside the workspace succeeds"))
-  expect(check).toContain("produced no output at all")
-  expect(check).toContain("SECURITY_CAPABILITIES did not take effect")
-  // The child's own stderr is the launcher's error message, and it names which
-  // Win32 call failed. Dropping it was what made the first failure unreadable.
-  expect(check).toContain("token.stderr")
-  // A Windows console decodes our UTF-8 as its OEM code page, so what this
-  // check PRINTS stays ASCII. Comments are not printed, so judge only the
-  // string literals.
-  const printed = check
-    .split("\n")
-    .filter((l) => !l.trimStart().startsWith("//"))
-    .join("\n")
-  // eslint-disable-next-line no-control-regex
-  expect(printed).not.toMatch(/[^\x00-\x7F]/)
 })
 
 test("the CreateProcess failure explains 203, the code a real machine returned", async () => {
@@ -294,32 +255,6 @@ test("the FFI bindings are opened once and held", async () => {
   expect(body).not.toContain("dlopen")
 })
 
-test("containment is proved by integrity as well as by the package SID", async () => {
-  // The dump from a real machine settled that the launch is correct: cb 112,
-  // dwFlags 0x100, lpAttributeList matching the allocated list, the SID at
-  // offset 0 of a 24-byte SECURITY_CAPABILITIES with zero capabilities, and
-  // CreateProcess returning true. Meanwhile `dir` was denied and the
-  // interpreter was unreadable — a live container. So the check was wrong, not
-  // the launcher: the package SID lives in TokenAppContainerSid, which is not a
-  // group, so `whoami /groups` need not print it. Every AppContainer runs at
-  // Low integrity, and a plain child here would inherit Medium.
-  const text = await Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname).text()
-  const body = text.slice(text.indexOf("export async function selfTest"))
-  expect(body).toContain("S-1-16-4096")
-  expect(body).toContain("S-1-15-2-")
-  expect(body).toContain("packaged || low")
-  // A pass has to say which signal proved it, or it is just another assertion.
-  expect(body).toContain("confirmed by")
-})
-
-test("the self-test can print the token instead of only judging it", async () => {
-  // Reporting a verdict about output nobody can see is what made a working
-  // container read as broken for two rounds.
-  const text = await Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname).text()
-  const body = text.slice(text.indexOf("export async function selfTest"))
-  expect(body).toContain("--- child token ---")
-})
-
 test("cmd.exe gets its tail verbatim, not CommandLineToArgvW quoting", () => {
   // Measured on a real machine. cmd does NOT parse its /c tail with
   // CommandLineToArgvW and does not recognise a backslash-escaped quote, so
@@ -350,4 +285,55 @@ test("everything that is not cmd still gets CommandLineToArgvW quoting", () => {
   expect(line).toContain('\\"')
   // And an executable merely named like cmd in an argument does not trigger it.
   expect(AppContainer.commandLine(["python.exe", "/c", "x"])).toBe("python.exe /c x")
+})
+test("containment is proved by the kernel, not by a command inside the container", async () => {
+  // The check used to run `whoami /groups` and pattern-match its output, which
+  // made containment depend on a command succeeding INSIDE the container. On a
+  // CI runner it does not: whoami resolves SIDs to display names through LSA,
+  // which an AppContainer with zero capabilities cannot reach, so it exits 66
+  // having printed nothing — while `exit 7` through the identical plan returns
+  // 7, proving the container hosts processes perfectly well. Two rounds were
+  // spent reading that as a containment failure.
+  //
+  // The launcher holds the child's process handle, so it asks the kernel
+  // TokenIsAppContainer and reports the answer. Nothing depends on what the
+  // child can do.
+  const launcher = await Bun.file(new URL("../../src/sandbox/appcontainer.ts", import.meta.url).pathname).text()
+  expect(launcher).toContain("TOKEN_IS_APP_CONTAINER = 29")
+  expect(launcher).toContain("OpenProcessToken")
+  expect(launcher).toContain("token appcontainer=")
+
+  const text = await Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname).text()
+  const body = text.slice(text.indexOf("export async function selfTest"))
+  expect(body).toContain("OPENSCIENCE_APPCONTAINER_REPORT")
+  expect(body).toContain("token appcontainer=")
+  // And it no longer asks a child to introspect itself. Comments are not code:
+  // the history of why whoami was wrong is worth keeping in the file.
+  const code = body
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join("\n")
+  expect(code).not.toContain("whoami")
+})
+
+test("a writable path gets a Low mandatory label, not only a DACL grant", async () => {
+  // The root cause of "write inside the workspace succeeds" failing, and it is
+  // not about paths or quoting, which is what several rounds chased.
+  //
+  // Every AppContainer runs at Low integrity; a directory created normally is
+  // Medium. Mandatory Integrity Control is evaluated BEFORE the DACL, and a
+  // Low-integrity principal cannot write to a Medium-integrity object even when
+  // the DACL grants it write access. So `/grant *SID:(OI)(CI)(F)` alone could
+  // never let the sandbox write anywhere.
+  const source = await Bun.file(new URL("../../src/sandbox/appcontainer.ts", import.meta.url).pathname).text()
+  const body = source.slice(source.indexOf("export function grant"), source.indexOf("export function quote"))
+  expect(body).toContain("/setintegritylevel")
+  expect(body).toContain("(OI)(CI)L")
+  // Only writable paths are relabelled. Lowering the label on the READ set
+  // would let any low-integrity process on the machine modify the interpreter
+  // the sandbox then executes — the opposite of the point.
+  const relabel = body.indexOf("/setintegritylevel")
+  const readGrant = body.indexOf("(OI)(CI)(RX)")
+  expect(relabel).toBeLessThan(readGrant)
+  expect(body.slice(readGrant)).not.toContain("/setintegritylevel")
 })

@@ -83,6 +83,9 @@ export namespace AppContainer {
   const PROCESS_INFORMATION_SIZE = 24
   const PI_PROCESS_OFFSET = 0
 
+  const TOKEN_QUERY = 0x0008
+  /** TOKEN_INFORMATION_CLASS.TokenIsAppContainer — a DWORD, 1 inside a container. */
+  const TOKEN_IS_APP_CONTAINER = 29
   const PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
   const EXTENDED_STARTUPINFO_PRESENT = 0x00080000
   /** HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS). The profile is per-user state
@@ -123,6 +126,8 @@ export namespace AppContainer {
       ConvertSidToStringSidW: { args: [t.ptr, t.ptr], returns: t.bool },
       ConvertStringSidToSidW: { args: [t.ptr, t.ptr], returns: t.bool },
       FreeSid: { args: [t.ptr], returns: t.ptr },
+      OpenProcessToken: { args: [t.ptr, t.u32, t.ptr], returns: t.bool },
+      GetTokenInformation: { args: [t.ptr, t.u32, t.ptr, t.u32, t.ptr], returns: t.bool },
     })
     const kernel = ffi.dlopen("kernel32.dll", {
       LocalFree: { args: [t.ptr], returns: t.ptr },
@@ -249,23 +254,41 @@ export namespace AppContainer {
    */
   export function grant(sid: string, writable: string[], readable: string[] = []) {
     const failures: string[] = []
-    // Read-and-execute, not full control, for the read set. The interpreter has
-    // to be EXECUTABLE as well as readable — a venv's Scripts\python.exe is a
-    // redirector that starts the base interpreter — so plain (R) is not enough,
-    // and (F) would hand the sandbox write access to the Python installation it
-    // is supposed to be confined away from.
-    const rights: Array<[string[], string]> = [
-      [writable, "(OI)(CI)(F)"],
-      [readable.filter((p) => !writable.includes(p)), "(OI)(CI)(RX)"],
-    ]
-    for (const [paths, mask] of rights)
-      for (const target of paths) {
-        const proc = Bun.spawnSync(["icacls.exe", target, "/grant", `*${sid}:${mask}`, "/Q"], {
-          stdout: "ignore",
-          stderr: "pipe",
-        })
-        if (proc.exitCode !== 0) failures.push(`${target}: ${proc.stderr.toString().trim() || `exit ${proc.exitCode}`}`)
-      }
+    const icacls = (target: string, args: string[]) => {
+      const proc = Bun.spawnSync(["icacls.exe", target, ...args, "/Q"], { stdout: "ignore", stderr: "pipe" })
+      if (proc.exitCode !== 0) failures.push(`${target}: ${proc.stderr.toString().trim() || `exit ${proc.exitCode}`}`)
+    }
+    for (const target of writable) {
+      // Read-and-execute plus write, for the DACL.
+      icacls(target, ["/grant", `*${sid}:(OI)(CI)(F)`])
+      // And the mandatory label, WITHOUT WHICH THE GRANT ABOVE DOES NOTHING.
+      //
+      // Every AppContainer runs at Low integrity; a file or directory created
+      // normally is Medium. Mandatory Integrity Control is evaluated BEFORE the
+      // DACL, and a Low-integrity principal cannot write to a Medium-integrity
+      // object even when the DACL explicitly grants it write access. So the
+      // grant above was necessary and never sufficient, and the self-test's
+      // "write inside the workspace succeeds" could not pass however the paths
+      // were spelled — which is what several rounds of shell-quoting fixes were
+      // actually chasing.
+      //
+      // The cost is real and worth stating: labelling the workspace Low means
+      // any OTHER low-integrity process on the machine can write there too — a
+      // sandboxed browser tab, say. That is the standard price of an
+      // AppContainer-writable directory and what Chromium's sandbox does for the
+      // same reason; there is no way to raise an AppContainer above Low. It is
+      // applied ONLY to paths already chosen as writable, never to the readable
+      // set: lowering the label on an interpreter installation would let any
+      // low-integrity process on the machine modify the Python we then execute.
+      icacls(target, ["/setintegritylevel", "(OI)(CI)L"])
+    }
+    // Read AND execute: the interpreter must be runnable, so plain (R) is not
+    // enough; never (F), which would hand a sandboxed process write access to
+    // the Python installation it is confined away from. No label change —
+    // MIC's default policy is no-write-up only, so reading a Medium object
+    // from Low is already allowed.
+    for (const target of readable.filter((p) => !writable.includes(p)))
+      icacls(target, ["/grant", `*${sid}:(OI)(CI)(RX)`])
     return failures
   }
 
@@ -471,6 +494,43 @@ export namespace AppContainer {
       ffi.ptr(info),
     )
     say(`CreateProcessW -> ${ok} (Win32 ${ok ? 0 : kernel.GetLastError()})`)
+    // Ask the KERNEL whether the child is contained, rather than asking the
+    // child to introspect itself.
+    //
+    // The self-test ran `whoami /groups` and pattern-matched its output, which
+    // made containment depend on a command succeeding INSIDE the container. On a
+    // CI runner it does not: `whoami /groups` resolves SIDs to display names
+    // through LSA, which an AppContainer with zero capabilities cannot reach, so
+    // it exits 66 with no output — while `exit 7` through the identical plan
+    // returns 7, proving the container hosts processes perfectly well. Two
+    // rounds were spent reading that as a containment failure.
+    //
+    // We hold the process handle, so TokenIsAppContainer answers directly and
+    // cannot be confounded by what the child can or cannot do. Queried before
+    // the wait: the handle keeps the process object alive either way, but a
+    // token query on a live process is the case Windows documents.
+    if (ok && process.env["OPENSCIENCE_APPCONTAINER_REPORT"] === "1") {
+      const child = ffi.read.ptr(ffi.ptr(info), PI_PROCESS_OFFSET)
+      const tokenOut = new BigUint64Array(1)
+      if (advapi.OpenProcessToken(child as never, TOKEN_QUERY, ffi.ptr(tokenOut))) {
+        const token = ffi.read.ptr(ffi.ptr(tokenOut), 0)
+        const valueOut = new Uint32Array(1)
+        const lenOut = new Uint32Array(1)
+        const read = advapi.GetTokenInformation(
+          token as never,
+          TOKEN_IS_APP_CONTAINER,
+          ffi.ptr(valueOut),
+          4,
+          ffi.ptr(lenOut),
+        )
+        process.stderr.write(`openscience[appcontainer] token appcontainer=${read ? valueOut[0] : "?"}\n`)
+        kernel.CloseHandle(token as never)
+      } else {
+        process.stderr.write(
+          `openscience[appcontainer] token appcontainer=? (OpenProcessToken Win32 ${kernel.GetLastError()})\n`,
+        )
+      }
+    }
     // Only now is the attribute list dead. Referenced here so nothing above can
     // be considered unreachable while the kernel still holds pointers into it.
     kernel.DeleteProcThreadAttributeList(ffi.ptr(attributes))

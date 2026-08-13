@@ -1279,9 +1279,14 @@ export namespace Sandbox {
     file: string,
     args: string[],
     cwd: string,
+    env?: Record<string, string>,
   ): Promise<{ status: number; stdout: string; stderr: string }> {
     return new Promise((resolve) => {
-      const proc = spawn(file, args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
+      const proc = spawn(file, args, {
+        cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+        ...(env ? { env: { ...process.env, ...env } } : {}),
+      })
       let stdout = ""
       let stderr = ""
       proc.stdout?.on("data", (d) => {
@@ -1318,66 +1323,48 @@ export namespace Sandbox {
     const outside = path.join(os.homedir(), `.openscience-sbx-escape-${process.pid}`)
     const checks: Check[] = []
 
-    const run = (command: string, network: "allow" | "deny") => {
+    const run = (command: string, network: "allow" | "deny", env?: Record<string, string>) => {
       const p = plan({ command, shell, cwd: work, workspace: [work], options: { enabled: true, network } })
-      return runAsync(p.file, p.args ?? [], work)
+      return runAsync(p.file, p.args ?? [], work, env)
     }
 
     try {
       // Windows first, because every other check below is meaningless if this
       // one fails. A child that never entered the container looks EXACTLY like
-      // a container with no policy applied: writes escape and the network
-      // works. `whoami /groups` prints the token's groups, and an AppContainer
-      // token carries its package SID — so this separates "the launcher did not
-      // confine it" from "it is confined and the policy is wrong", which is the
-      // difference between debugging CreateProcess and debugging the spec.
+      // a container with no policy applied: writes escape and the network works.
+      // Separating "the launcher did not confine it" from "it is confined and
+      // the policy is wrong" is the difference between debugging CreateProcess
+      // and debugging the spec, and they are indistinguishable from outside.
       if (b === "appcontainer") {
-        const token = await run("whoami /groups", "allow")
-        // Two signals, because the first one alone was not enough.
+        // `exit 0`, not `whoami /groups`. The check used to run whoami and
+        // pattern-match its output, which made containment depend on a command
+        // succeeding INSIDE the container. On a CI runner it does not: whoami
+        // resolves SIDs to display names through LSA, which an AppContainer with
+        // zero capabilities cannot reach, so it exits 66 having printed nothing —
+        // while `exit 7` through the identical plan returns 7, proving the
+        // container hosts processes fine. Two rounds were spent reading that as a
+        // containment failure, after four spent on other diagnostics that
+        // reported conclusions rather than observations.
         //
-        // The package SID lives in the token's TokenAppContainerSid, which is
-        // NOT a group — so `whoami /groups` need not print it, and testing for
-        // it can report "unconfined" for a container that is working. On the
-        // machine this was measured on, the launcher demonstrably handed the
-        // kernel a correct SECURITY_CAPABILITIES (cb 112, a matching attribute
-        // list pointer, the SID at offset 0, zero capabilities) and
-        // CreateProcess succeeded, while `dir` was denied and the interpreter
-        // was unreadable — both signs of a live container.
-        //
-        // Integrity is the reliable half: EVERY AppContainer runs at Low
-        // (S-1-16-4096), and a plain child of this process would inherit Medium
-        // (S-1-16-8192). Either signal is proof; neither being present is the
-        // only real failure.
-        const packaged = /S-1-15-2-/.test(token.stdout)
-        const low = /S-1-16-4096/.test(token.stdout)
-        const confined = packaged || low
-        // Report what was measured, not a guess at which of the two causes it
-        // was. Silence and an uncontained token are different failures: the
-        // first says the launcher never got as far as running the command, the
-        // second says it ran unconfined. The first version of this check named
-        // only the second, and the machine that hit it had the first.
-        const silent = !token.stdout.trim()
+        // The launcher holds the child's process handle, so it asks the kernel
+        // TokenIsAppContainer directly and reports the answer. Nothing here
+        // depends on what the child can do.
+        const query = await run("exit 0", "allow", { OPENSCIENCE_APPCONTAINER_REPORT: "1" })
+        const reported = query.stderr.match(/openscience\[appcontainer\] token appcontainer=(\d|\?)/)?.[1]
+        const confined = reported === "1"
         checks.push({
           name: "the child actually runs inside the AppContainer",
           pass: confined,
           detail: confined
-            ? // Say WHICH signal proved it, so a pass is auditable too.
-              `confirmed by ${[packaged && "package SID", low && "Low integrity"].filter(Boolean).join(" and ")}`
+            ? "the kernel reports TokenIsAppContainer=1 for the child"
             : [
-                silent
-                  ? `the child produced no output at all (exit ${token.status}), so its token could not be read`
-                  : "the child ran, but its token has neither a package SID nor Low integrity, so SECURITY_CAPABILITIES did not take effect",
-                // The token itself, not a verdict about it. Pattern-matching it
-                // and reporting only the conclusion is what made a working
-                // container look broken for two rounds.
-                process.env["OPENSCIENCE_SANDBOX_DEBUG"] === "1"
-                  ? `\n--- child token ---\n${token.stdout.trim()}`
-                  : undefined,
-                // OPENSCIENCE_SANDBOX_DEBUG=1 keeps the launcher's whole dump
-                // instead of its first line: when containment fails for real,
-                // the intermediate Win32 values are the entire diagnosis, and
-                // one line of them is worth nothing.
-                process.env["OPENSCIENCE_SANDBOX_DEBUG"] === "1" ? `\n${token.stderr.trim()}` : firstLine(token.stderr),
+                reported === undefined
+                  ? `the launcher never reported a token (child exit ${query.status})`
+                  : reported === "?"
+                    ? "the child's token could not be read"
+                    : "the kernel reports TokenIsAppContainer=0: SECURITY_CAPABILITIES did not take effect",
+                firstLine(query.stderr),
+                process.env["OPENSCIENCE_SANDBOX_DEBUG"] === "1" ? `\n${query.stderr.trim()}` : undefined,
               ]
                 .filter(Boolean)
                 .join(": "),
