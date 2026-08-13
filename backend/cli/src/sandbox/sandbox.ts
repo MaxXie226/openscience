@@ -1300,7 +1300,24 @@ export namespace Sandbox {
       // difference between debugging CreateProcess and debugging the spec.
       if (b === "appcontainer") {
         const token = await run("whoami /groups", "allow")
-        const confined = /S-1-15-2-/.test(token.stdout)
+        // Two signals, because the first one alone was not enough.
+        //
+        // The package SID lives in the token's TokenAppContainerSid, which is
+        // NOT a group — so `whoami /groups` need not print it, and testing for
+        // it can report "unconfined" for a container that is working. On the
+        // machine this was measured on, the launcher demonstrably handed the
+        // kernel a correct SECURITY_CAPABILITIES (cb 112, a matching attribute
+        // list pointer, the SID at offset 0, zero capabilities) and
+        // CreateProcess succeeded, while `dir` was denied and the interpreter
+        // was unreadable — both signs of a live container.
+        //
+        // Integrity is the reliable half: EVERY AppContainer runs at Low
+        // (S-1-16-4096), and a plain child of this process would inherit Medium
+        // (S-1-16-8192). Either signal is proof; neither being present is the
+        // only real failure.
+        const packaged = /S-1-15-2-/.test(token.stdout)
+        const low = /S-1-16-4096/.test(token.stdout)
+        const confined = packaged || low
         // Report what was measured, not a guess at which of the two causes it
         // was. Silence and an uncontained token are different failures: the
         // first says the launcher never got as far as running the command, the
@@ -1311,11 +1328,16 @@ export namespace Sandbox {
           name: "the child actually runs inside the AppContainer",
           pass: confined,
           detail: confined
-            ? undefined
+            ? // Say WHICH signal proved it, so a pass is auditable too.
+              `confirmed by ${[packaged && "package SID", low && "Low integrity"].filter(Boolean).join(" and ")}`
             : [
                 silent
                   ? `the child produced no output at all (exit ${token.status}), so its token could not be read`
-                  : "the child ran but its token carries no package SID, so SECURITY_CAPABILITIES did not take effect",
+                  : "the child ran, but its token has neither a package SID nor Low integrity, so SECURITY_CAPABILITIES did not take effect",
+                // The token itself, not a verdict about it. Pattern-matching it
+                // and reporting only the conclusion is what made a working
+                // container look broken for two rounds.
+                process.env["OPENSCIENCE_SANDBOX_DEBUG"] === "1" ? `\n--- child token ---\n${token.stdout.trim()}` : undefined,
                 // OPENSCIENCE_SANDBOX_DEBUG=1 keeps the launcher's whole dump
                 // instead of its first line: when containment fails for real,
                 // the intermediate Win32 values are the entire diagnosis, and

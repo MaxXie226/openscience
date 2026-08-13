@@ -293,3 +293,29 @@ test("the FFI bindings are opened once and held", async () => {
   const body = source.slice(source.indexOf("export function launch"))
   expect(body).not.toContain("dlopen")
 })
+
+test("containment is proved by integrity as well as by the package SID", async () => {
+  // The dump from a real machine settled that the launch is correct: cb 112,
+  // dwFlags 0x100, lpAttributeList matching the allocated list, the SID at
+  // offset 0 of a 24-byte SECURITY_CAPABILITIES with zero capabilities, and
+  // CreateProcess returning true. Meanwhile `dir` was denied and the
+  // interpreter was unreadable — a live container. So the check was wrong, not
+  // the launcher: the package SID lives in TokenAppContainerSid, which is not a
+  // group, so `whoami /groups` need not print it. Every AppContainer runs at
+  // Low integrity, and a plain child here would inherit Medium.
+  const text = await Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname).text()
+  const body = text.slice(text.indexOf("export async function selfTest"))
+  expect(body).toContain("S-1-16-4096")
+  expect(body).toContain("S-1-15-2-")
+  expect(body).toContain("packaged || low")
+  // A pass has to say which signal proved it, or it is just another assertion.
+  expect(body).toContain("confirmed by")
+})
+
+test("the self-test can print the token instead of only judging it", async () => {
+  // Reporting a verdict about output nobody can see is what made a working
+  // container read as broken for two rounds.
+  const text = await Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname).text()
+  const body = text.slice(text.indexOf("export async function selfTest"))
+  expect(body).toContain("--- child token ---")
+})

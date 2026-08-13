@@ -429,6 +429,7 @@ export namespace AppContainer {
       `  lpAttributeList=0x${new DataView(startup.buffer).getBigUint64(STARTUPINFO_ATTRIBUTE_LIST_OFFSET, true).toString(16)}`,
     )
     say(`commandline ${commandLine(argv)}`)
+    say(`creationflags 0x${EXTENDED_STARTUPINFO_PRESENT.toString(16)} (EXTENDED_STARTUPINFO_PRESENT)`)
 
     const ok = kernel.CreateProcessW(
       null,
