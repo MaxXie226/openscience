@@ -758,6 +758,30 @@ export namespace Sandbox {
     return ["__appcontainer-launch", Buffer.from(JSON.stringify(spec), "utf8").toString("base64"), "--", ...argv]
   }
 
+  /**
+   * What has to precede `__appcontainer-launch` for the binary to re-enter
+   * itself, which differs between a release and a source checkout.
+   *
+   * In a compiled release `process.execPath` IS the openscience binary, so
+   * `openscience __appcontainer-launch ...` runs directly. Under
+   * `bun run src/index.ts` — development, and every `bun test` — `process.execPath`
+   * is `bun`, and `bun __appcontainer-launch ...` is not a valid invocation: bun
+   * needs an entry script first. It exits 1 having printed nothing, which the
+   * self-test then reports as a child that produced no output, indistinguishable
+   * from a launcher that crashed.
+   *
+   * Found by CI on a real Windows runner, not by hand: every manual test ran the
+   * compiled binary, where this path is correct, so the dev-mode break was
+   * invisible from outside. `sandbox test` on a developer's checkout would have
+   * reported the sandbox as broken on a machine where it works.
+   *
+   * The egress shim has the same hazard and solves it by BUNDLING a separate
+   * entry, because `shimScript` interpolates its binary as one shell word and a
+   * two-word "bun <entry>" cannot be smuggled through. This launcher is a plain
+   * argv, so the two-word form is simply expressible and no artifact is needed.
+   */
+  const launcherEntry = () => (Installation.isLocal() ? [path.resolve(import.meta.dir, "..", "index.ts")] : [])
+
   function specForArgv(argv: string[], policy: Policy, b: Backend): Spec | null {
     switch (b) {
       case "seatbelt":
@@ -766,7 +790,7 @@ export namespace Sandbox {
         return { file: "bwrap", args: [...bubblewrapArgs(policy), "--", ...argv] }
       case "appcontainer":
         // The binary launches itself into the container; see appContainerArgs.
-        return { file: process.execPath, args: appContainerArgs(policy, argv) }
+        return { file: process.execPath, args: [...launcherEntry(), ...appContainerArgs(policy, argv)] }
       default:
         return null
     }

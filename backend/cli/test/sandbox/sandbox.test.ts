@@ -1120,7 +1120,12 @@ describe("Sandbox on win32 (AppContainer composition)", () => {
     expect(w.sandboxed).toBe(true)
     expect(w.backend).toBe("appcontainer")
     expect(w.file).toBe(process.execPath)
-    expect(w.args[0]).toBe("__appcontainer-launch")
+    // Located, not indexed at 0. Running from source, `process.execPath` is bun
+    // and an entry script has to precede the flag — `bun __appcontainer-launch`
+    // is not a valid invocation and exits 1 silently, which the self-test reads
+    // as a child that produced no output. A release binary needs no entry, so
+    // the flag's position differs between the two modes by design.
+    expect(w.args).toContain("__appcontainer-launch")
   })
 
   test("the real argv survives at the tail, after a --", () => {
@@ -1134,7 +1139,7 @@ describe("Sandbox on win32 (AppContainer composition)", () => {
     // from every shell, and paths there routinely carry spaces, quotes and
     // backslashes. A blob with no shell-significant characters cannot be mangled.
     const w = Sandbox.wrapArgv({ ...base, options: { enabled: true, network: "allow" } })
-    const blob = w.args[1]!
+    const blob = w.args[w.args.indexOf("__appcontainer-launch") + 1]!
     expect(blob).toMatch(/^[A-Za-z0-9+/=]+$/)
     const spec = decode(w.args)
     expect(spec.profile).toBe(Sandbox.appContainerProfile(["/w/project"]))
@@ -1228,7 +1233,9 @@ describe("Sandbox.plan on win32", () => {
     // failed on it and every sandboxed command carried a grant warning on its
     // stderr — burying the real errors under it.
     const p = Sandbox.plan({ ...base, command: "echo hi", shell: "cmd.exe" })
-    const spec = JSON.parse(Buffer.from(p.args![1]!, "base64").toString("utf8"))
+    const spec = JSON.parse(
+      Buffer.from(p.args![p.args!.indexOf("__appcontainer-launch") + 1]!, "base64").toString("utf8"),
+    )
     // On a Windows host "/tmp" resolves to "C:\tmp"; asserting the absence of
     // "/tmp" itself would only pass here by accident, because this Linux box's
     // own os.tmpdir() IS "/tmp" and legitimately belongs in the list.

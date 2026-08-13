@@ -154,7 +154,14 @@ jobs:
       # kernel — the SID, the attribute list, the whole STARTUPINFOEX with cb and
       # lpAttributeList broken out. On a machine no one can log into, a failure
       # that only says "expected true" is worth almost nothing.
-      - run: bun test test/sandbox/ test/shell/
+      # Just the live file. The rest of test/sandbox/ asserts POSIX composition
+      # -- seatbelt profile text, bubblewrap argv, `/tmp` paths that path.resolve
+      # turns into `C:\tmp` here -- and several tests read source through
+      # `new URL(...).pathname`, which yields `/D:/a/...` on Windows. Those are
+      # Linux/macOS concerns that happen to live in the same directory; running
+      # them here would produce 30-odd red results that say nothing about
+      # Windows. Widen deliberately, not by directory.
+      - run: bun test test/sandbox/appcontainer-live.test.ts
         shell: bash
         working-directory: backend/cli
         env:

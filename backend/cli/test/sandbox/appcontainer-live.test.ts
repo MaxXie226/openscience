@@ -30,18 +30,24 @@ import { Sandbox } from "../../src/sandbox/sandbox"
 
 const windows = process.platform === "win32"
 
-test.if(windows)("the AppContainer confines a real child on a real Windows kernel", async () => {
-  const result = await Sandbox.selfTest()
-  // Print every check before asserting: a bare "expected true, got false" from
-  // CI is worth almost nothing when the machine is not one we can log into.
-  for (const check of result.checks)
-    console.log(`  ${check.skipped ? "skip" : check.pass ? "pass" : "FAIL"}  ${check.name}${check.detail ? ` — ${check.detail}` : ""}`)
-  expect(result.available).toBe(true)
-  expect(result.backend).toBe("appcontainer")
-  const containment = result.checks.find((c) => c.name.includes("runs inside the AppContainer"))
-  expect(containment?.pass).toBe(true)
-  expect(result.ok).toBe(true)
-}, 120_000)
+test.if(windows)(
+  "the AppContainer confines a real child on a real Windows kernel",
+  async () => {
+    const result = await Sandbox.selfTest()
+    // Print every check before asserting: a bare "expected true, got false" from
+    // CI is worth almost nothing when the machine is not one we can log into.
+    for (const check of result.checks)
+      console.log(
+        `  ${check.skipped ? "skip" : check.pass ? "pass" : "FAIL"}  ${check.name}${check.detail ? ` — ${check.detail}` : ""}`,
+      )
+    expect(result.available).toBe(true)
+    expect(result.backend).toBe("appcontainer")
+    const containment = result.checks.find((c) => c.name.includes("runs inside the AppContainer"))
+    expect(containment?.pass).toBe(true)
+    expect(result.ok).toBe(true)
+  },
+  120_000,
+)
 
 test.if(!windows)("this file's assertions are inert off Windows", () => {
   // Guard against the file quietly becoming dead weight: if `selfTest` stops
