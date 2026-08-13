@@ -31,6 +31,33 @@ import { Sandbox } from "../../src/sandbox/sandbox"
 const windows = process.platform === "win32"
 
 test.if(windows)(
+  "a trivial command survives the container at all",
+  async () => {
+    // Separates "the container cannot host a process here" from "this command
+    // failed inside it". A CI runner produced exit 66 with nothing on either
+    // stream, where a developer machine running the same build produced a token.
+    // `exit 7` needs no executable beyond the shell itself and no readable path,
+    // so it fails only if the container cannot host a process on this machine.
+    const { Shell } = await import("../../src/shell/shell")
+    const shell = Shell.acceptable()
+    const plan = Sandbox.plan({
+      command: "exit 7",
+      shell,
+      cwd: process.cwd(),
+      workspace: [process.cwd()],
+      options: { enabled: true, network: "deny" },
+    })
+    const proc = Bun.spawn([plan.file, ...(plan.args ?? [])], { stdout: "pipe", stderr: "pipe" })
+    const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+    await proc.exited
+    console.log(
+      `  shell ${shell}\n  exit ${proc.exitCode} (expect 7)\n  stdout: ${out.trim()}\n  stderr: ${err.trim()}`,
+    )
+    expect(proc.exitCode).toBe(7)
+  },
+  120_000,
+)
+test.if(windows)(
   "the AppContainer confines a real child on a real Windows kernel",
   async () => {
     const result = await Sandbox.selfTest()

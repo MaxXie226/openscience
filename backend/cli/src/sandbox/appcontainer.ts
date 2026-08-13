@@ -489,9 +489,17 @@ export namespace AppContainer {
     }
 
     const handle = ffi.read.ptr(ffi.ptr(info), PI_PROCESS_OFFSET)
-    kernel.WaitForSingleObject(handle as never, INFINITE)
+    const waited = kernel.WaitForSingleObject(handle as never, INFINITE)
     const codeOut = new Uint32Array(1)
-    kernel.GetExitCodeProcess(handle as never, ffi.ptr(codeOut))
+    const got = kernel.GetExitCodeProcess(handle as never, ffi.ptr(codeOut))
+    // The debug trail stopped at CreateProcess, so a child that started and then
+    // died told us only "no output". On a CI runner the child exits 66 with
+    // nothing on either stream, where the same build on a developer machine
+    // produces a Low-integrity token — so what happens BETWEEN start and exit is
+    // the whole question. WaitForSingleObject answers 0 for a real exit and
+    // 0x102 for a timeout we never asked for; a false GetExitCodeProcess means
+    // the code below is not the child's at all.
+    say(`wait -> ${waited}, GetExitCodeProcess -> ${got}, child exit ${codeOut[0]}`)
     kernel.CloseHandle(handle as never)
     return codeOut[0]!
   }
