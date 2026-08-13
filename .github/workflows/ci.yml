@@ -118,6 +118,48 @@ jobs:
         shell: bash
         working-directory: backend/cli
 
+  # Windows is deliberately NOT in the matrix above. That job's `test/package/`
+  # leg is the merge gate — a governed install under network "allowlist" — and
+  # allowlist egress does not exist on Windows yet: the container holds zero
+  # capabilities, so it has no network by construction, and nothing serves the
+  # broker pipe the spec carries. Adding windows-latest there would be red for a
+  # feature that was never built, which teaches a reader nothing.
+  #
+  # What this job DOES cover is the part that was only ever verified by hand:
+  # `test/sandbox/appcontainer-live.test.ts` runs a real CreateProcessW with real
+  # SECURITY_CAPABILITIES and asserts the child is confined. Everything else in
+  # test/sandbox/ exercises the Windows branch from Linux with the platform
+  # injected, which proves what we compose and nothing about what Windows does
+  # with it. That gap cost roughly ten manual round trips on a contributor's own
+  # machine, one command at a time, for bugs that were not exotic: `-c` where cmd
+  # wanted `/c`, `printf` in a shell with no printf, CommandLineToArgvW quoting
+  # handed to the one program that does not parse it that way. Each would have
+  # been red here within minutes.
+  #
+  # Widen this to test/package/ once the named-pipe broker lands.
+  sandbox-windows:
+    name: Sandbox (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-bun
+      - name: Configure git for tests
+        run: |
+          git config --global user.email "ci@openscience.dev"
+          git config --global user.name "OpenScience CI"
+          git config --global init.defaultBranch main
+        shell: bash
+      # OPENSCIENCE_SANDBOX_DEBUG makes the launcher dump what it hands the
+      # kernel — the SID, the attribute list, the whole STARTUPINFOEX with cb and
+      # lpAttributeList broken out. On a machine no one can log into, a failure
+      # that only says "expected true" is worth almost nothing.
+      - run: bun test test/sandbox/ test/shell/
+        shell: bash
+        working-directory: backend/cli
+        env:
+          OPENSCIENCE_SANDBOX_DEBUG: "1"
+
   test:
     name: Test
     runs-on: ubuntu-latest
