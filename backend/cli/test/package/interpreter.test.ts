@@ -157,7 +157,11 @@ test("interpreter() and locate() agree for an environment built here", async () 
     // And it is genuinely rooted in the environment, not the host.
     const check = await Installer.inspect(Installer.interpreter(dir))
     expect(check?.prefix).toBeTruthy()
-    expect(path.resolve(check!.prefix)).toBe(path.resolve(dir))
+    // realpath, not just resolve — the same firmlink that broke `same()` in the
+    // installer breaks the assertion about it. macOS temp is /var/folders/...,
+    // /var is a symlink to /private/var, and Python reports the real path.
+    const { realpathSync } = await import("fs")
+    expect(realpathSync(check!.prefix)).toBe(realpathSync(dir))
   } finally {
     await (await import("fs/promises")).rm(dir, { recursive: true, force: true }).catch(() => {})
   }
