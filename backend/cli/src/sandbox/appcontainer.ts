@@ -125,24 +125,30 @@ export namespace AppContainer {
       FreeSid: { args: [t.ptr], returns: t.ptr },
     })
     const kernel = ffi.dlopen("kernel32.dll", {
-        LocalFree: { args: [t.ptr], returns: t.ptr },
-        GetLastError: { args: [], returns: t.u32 },
-        GetStdHandle: { args: [t.u32], returns: t.ptr },
-        SetHandleInformation: { args: [t.ptr, t.u32, t.u32], returns: t.bool },
-        InitializeProcThreadAttributeList: { args: [t.ptr, t.u32, t.u32, t.ptr], returns: t.bool },
-        UpdateProcThreadAttribute: { args: [t.ptr, t.u32, t.u64, t.ptr, t.u64, t.ptr, t.ptr], returns: t.bool },
-        DeleteProcThreadAttributeList: { args: [t.ptr], returns: t.void },
-        CreateProcessW: {
-          args: [t.ptr, t.ptr, t.ptr, t.ptr, t.bool, t.u32, t.ptr, t.ptr, t.ptr, t.ptr],
-          returns: t.bool,
-        },
-        WaitForSingleObject: { args: [t.ptr, t.u32], returns: t.u32 },
-        GetExitCodeProcess: { args: [t.ptr, t.ptr], returns: t.bool },
-        CloseHandle: { args: [t.ptr], returns: t.bool },
+      LocalFree: { args: [t.ptr], returns: t.ptr },
+      GetLastError: { args: [], returns: t.u32 },
+      GetStdHandle: { args: [t.u32], returns: t.ptr },
+      SetHandleInformation: { args: [t.ptr, t.u32, t.u32], returns: t.bool },
+      InitializeProcThreadAttributeList: { args: [t.ptr, t.u32, t.u32, t.ptr], returns: t.bool },
+      UpdateProcThreadAttribute: { args: [t.ptr, t.u32, t.u64, t.ptr, t.u64, t.ptr, t.ptr], returns: t.bool },
+      DeleteProcThreadAttributeList: { args: [t.ptr], returns: t.void },
+      CreateProcessW: {
+        args: [t.ptr, t.ptr, t.ptr, t.ptr, t.bool, t.u32, t.ptr, t.ptr, t.ptr, t.ptr],
+        returns: t.bool,
+      },
+      WaitForSingleObject: { args: [t.ptr, t.u32], returns: t.u32 },
+      GetExitCodeProcess: { args: [t.ptr, t.ptr], returns: t.bool },
+      CloseHandle: { args: [t.ptr], returns: t.bool },
     })
     // The library objects are returned, not just their symbols, so they stay
     // reachable for the life of the process.
-    return { ffi, libs: [userenv, advapi, kernel], userenv: userenv.symbols, advapi: advapi.symbols, kernel: kernel.symbols }
+    return {
+      ffi,
+      libs: [userenv, advapi, kernel],
+      userenv: userenv.symbols,
+      advapi: advapi.symbols,
+      kernel: kernel.symbols,
+    }
   }
 
   /**
@@ -308,7 +314,10 @@ export namespace AppContainer {
     // does for every Windows spawn.
     const at = argv.findIndex((value) => value.toLowerCase() === "/c")
     if (at > 0 && /(^|[\\/])cmd(\.exe)?$/i.test(argv[0] ?? "")) {
-      return `${argv.slice(0, at + 1).map(quote).join(" ")} "${argv.slice(at + 1).join(" ")}"`
+      return `${argv
+        .slice(0, at + 1)
+        .map(quote)
+        .join(" ")} "${argv.slice(at + 1).join(" ")}"`
     }
     return argv.map(quote).join(" ")
   }

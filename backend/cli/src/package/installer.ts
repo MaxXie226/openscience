@@ -1,4 +1,5 @@
 import fs from "fs/promises"
+import { realpathSync } from "fs"
 import path from "path"
 import { Config } from "../config/config"
 import { Global } from "../global"
@@ -273,7 +274,10 @@ export namespace Installer {
         // indistinguishable on a machine with no Python at all and on one whose
         // only Python is disqualified — two problems with different remedies.
         ...(chosen.rejected.length
-          ? ["Interpreters were found, but none can build a usable environment:", ...chosen.rejected.map((r) => `  - ${r}`)]
+          ? [
+              "Interpreters were found, but none can build a usable environment:",
+              ...chosen.rejected.map((r) => `  - ${r}`),
+            ]
           : []),
         "Install one of:",
         "  - the venv module: `apt install python3-venv` on Debian/Ubuntu (most other distributions ship it with python3)",
@@ -373,9 +377,28 @@ export namespace Installer {
     }
   }
 
-  /** Compare two paths as the host filesystem would. */
+  /**
+   * Compare two paths as the host filesystem would — following symlinks.
+   *
+   * `path.resolve` alone is not enough, and macOS is where that bites. The
+   * system temp directory is `/var/folders/...`, and `/var` is a firmlink to
+   * `/private/var`, so Python reports `sys.prefix` under `/private/var` while
+   * the caller holds the `/var` spelling. The two are the same directory and
+   * compared unequal, so EVERY environment creation on macOS was judged to have
+   * produced no usable interpreter, deleted itself, and threw — taking the
+   * merge-gate tests with it. The sandbox already carries `withPrivateAliases`
+   * for this exact firmlink; this is the same hazard in a second place.
+   */
   const same = (a: string, b: string) => {
-    const [x, y] = [path.resolve(a), path.resolve(b)]
+    const real = (value: string) => {
+      const resolved = path.resolve(value)
+      try {
+        return realpathSync(resolved)
+      } catch {
+        return resolved
+      }
+    }
+    const [x, y] = [real(a), real(b)]
     return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y
   }
 

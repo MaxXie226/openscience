@@ -87,7 +87,9 @@ test("inspect() reports the real interpreter, and undefined for a non-interprete
   const chosen = await Installer.select()
   const found = await Installer.inspect(chosen.binary!)
   expect(found?.version[0]).toBe(3)
-  expect(found?.purelib).toContain("site-packages")
+  // Debian and Ubuntu use dist-packages, not site-packages, for the system
+  // interpreter — the assertion is that a package directory was reported.
+  expect(found?.purelib).toMatch(/(site|dist)-packages/)
   // A Store alias exits non-zero; stand in for it with something that exists
   // and is not an interpreter, which is the same observable.
   expect(await Installer.inspect(process.execPath).catch(() => undefined)).toBeUndefined()
@@ -98,7 +100,10 @@ test("a rejected candidate does not end the search", async () => {
   // Windows failures had a bad candidate ahead of a good one — the alias, then
   // MSYS2 — so "reject" has to mean "keep looking" across every PATH entry.
   const source = await Bun.file(new URL("../../src/package/installer.ts", import.meta.url).pathname).text()
-  const body = source.slice(source.indexOf("export async function select()"), source.indexOf("async function registered"))
+  const body = source.slice(
+    source.indexOf("export async function select()"),
+    source.indexOf("async function registered"),
+  )
   expect(body).toContain("continue")
   expect(body).not.toContain("Bun.which")
   // Every rejection is recorded, so the failure can say what it looked at.

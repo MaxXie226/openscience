@@ -1346,14 +1346,14 @@ export namespace Sandbox {
                 // The token itself, not a verdict about it. Pattern-matching it
                 // and reporting only the conclusion is what made a working
                 // container look broken for two rounds.
-                process.env["OPENSCIENCE_SANDBOX_DEBUG"] === "1" ? `\n--- child token ---\n${token.stdout.trim()}` : undefined,
+                process.env["OPENSCIENCE_SANDBOX_DEBUG"] === "1"
+                  ? `\n--- child token ---\n${token.stdout.trim()}`
+                  : undefined,
                 // OPENSCIENCE_SANDBOX_DEBUG=1 keeps the launcher's whole dump
                 // instead of its first line: when containment fails for real,
                 // the intermediate Win32 values are the entire diagnosis, and
                 // one line of them is worth nothing.
-                process.env["OPENSCIENCE_SANDBOX_DEBUG"] === "1"
-                  ? `\n${token.stderr.trim()}`
-                  : firstLine(token.stderr),
+                process.env["OPENSCIENCE_SANDBOX_DEBUG"] === "1" ? `\n${token.stderr.trim()}` : firstLine(token.stderr),
               ]
                 .filter(Boolean)
                 .join(": "),
