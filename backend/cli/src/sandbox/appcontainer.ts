@@ -68,7 +68,15 @@ export namespace AppContainer {
   /** STARTUPINFOW is 104 bytes on x64; STARTUPINFOEXW appends lpAttributeList at 104. */
   const STARTUPINFOEX_SIZE = 112
   const STARTUPINFO_CB_OFFSET = 0
+  const STARTUPINFO_FLAGS_OFFSET = 60
+  const STARTUPINFO_STDIN_OFFSET = 80
+  const STARTUPINFO_STDOUT_OFFSET = 88
+  const STARTUPINFO_STDERR_OFFSET = 96
   const STARTUPINFO_ATTRIBUTE_LIST_OFFSET = 104
+  const STARTF_USESTDHANDLES = 0x00000100
+  const HANDLE_FLAG_INHERIT = 0x00000001
+  /** STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE as unsigned. */
+  const STD_HANDLES = { input: 0xfffffff6, output: 0xfffffff5, error: 0xfffffff4 }
   /** PROCESS_INFORMATION { HANDLE hProcess; HANDLE hThread; DWORD pid; DWORD tid } */
   const PROCESS_INFORMATION_SIZE = 24
   const PI_PROCESS_OFFSET = 0
@@ -103,6 +111,8 @@ export namespace AppContainer {
       kernel: ffi.dlopen("kernel32.dll", {
         LocalFree: { args: [t.ptr], returns: t.ptr },
         GetLastError: { args: [], returns: t.u32 },
+        GetStdHandle: { args: [t.u32], returns: t.ptr },
+        SetHandleInformation: { args: [t.ptr, t.u32, t.u32], returns: t.bool },
         InitializeProcThreadAttributeList: { args: [t.ptr, t.u32, t.u32, t.ptr], returns: t.bool },
         UpdateProcThreadAttribute: { args: [t.ptr, t.u32, t.u64, t.ptr, t.u64, t.ptr, t.ptr], returns: t.bool },
         DeleteProcThreadAttributeList: { args: [t.ptr], returns: t.void },
@@ -317,6 +327,43 @@ export namespace AppContainer {
     startupView.setUint32(STARTUPINFO_CB_OFFSET, STARTUPINFOEX_SIZE, true)
     startupView.setBigUint64(STARTUPINFO_ATTRIBUTE_LIST_OFFSET, BigInt(ffi.ptr(attributes)), true)
 
+    // Hand the child our own std handles, and let it inherit them.
+    //
+    // `bInheritHandles: false` was silently fatal in a way that looked exactly
+    // like a containment failure. The launcher is spawned with its stdout on a
+    // PIPE, and a child inheriting nothing has nowhere to write, so every
+    // sandboxed command produced empty output. The first Windows self-test read
+    // that empty stdout, found no package SID in it, and reported the container
+    // as not applied — when the token may have been correct and merely
+    // unreadable. Two different bugs with one observable, which is precisely
+    // what the token check was added to prevent, so the check now reports the
+    // child's exit status and stderr as well.
+    //
+    // This is not a test-only concern. Every sandboxed command's output crosses
+    // this boundary: pip's progress, a bash tool's result, a kernel's stream.
+    const inherit = (id: number) => {
+      const h = kernel.GetStdHandle(id) as number
+      // GetStdHandle answers 0 for "none" and INVALID_HANDLE_VALUE for failure;
+      // the latter is -1, which arrives here as an unsafe integer.
+      if (!Number.isSafeInteger(h) || h <= 0) return 0n
+      // Inheritance is a property of the handle in THIS process, and the ones
+      // we were given are not necessarily marked for it.
+      kernel.SetHandleInformation(h as never, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)
+      return BigInt(h)
+    }
+    const stdout = inherit(STD_HANDLES.output)
+    const stderr = inherit(STD_HANDLES.error)
+    // Only claim the handles when there is something to claim: with the flag
+    // set and a null handle the child gets no stdout at all, which is the very
+    // failure this replaces. Without it the child attaches to our console,
+    // which is the right fallback when we have one.
+    if (stdout && stderr) {
+      startupView.setUint32(STARTUPINFO_FLAGS_OFFSET, STARTF_USESTDHANDLES, true)
+      startupView.setBigUint64(STARTUPINFO_STDIN_OFFSET, inherit(STD_HANDLES.input), true)
+      startupView.setBigUint64(STARTUPINFO_STDOUT_OFFSET, stdout, true)
+      startupView.setBigUint64(STARTUPINFO_STDERR_OFFSET, stderr, true)
+    }
+
     const info = new Uint8Array(PROCESS_INFORMATION_SIZE)
     // Mutable: CreateProcessW may write into lpCommandLine.
     const line = wide(commandLine(argv))
@@ -326,7 +373,7 @@ export namespace AppContainer {
       ffi.ptr(line),
       null,
       null,
-      false,
+      true,
       EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
       null,
       null,

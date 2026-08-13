@@ -1262,12 +1262,25 @@ export namespace Sandbox {
       if (b === "appcontainer") {
         const token = await run("whoami /groups", "allow")
         const confined = /S-1-15-2-/.test(token.stdout)
+        // Report what was measured, not a guess at which of the two causes it
+        // was. Silence and an uncontained token are different failures: the
+        // first says the launcher never got as far as running the command, the
+        // second says it ran unconfined. The first version of this check named
+        // only the second, and the machine that hit it had the first.
+        const silent = !token.stdout.trim()
         checks.push({
           name: "the child actually runs inside the AppContainer",
           pass: confined,
           detail: confined
             ? undefined
-            : "no package SID in the child's token: CreateProcess succeeded but SECURITY_CAPABILITIES did not take effect, so nothing below is contained",
+            : [
+                silent
+                  ? `the child produced no output at all (exit ${token.status}), so its token could not be read`
+                  : "the child ran but its token carries no package SID, so SECURITY_CAPABILITIES did not take effect",
+                firstLine(token.stderr),
+              ]
+                .filter(Boolean)
+                .join(": "),
         })
         if (!confined) {
           checks.push({

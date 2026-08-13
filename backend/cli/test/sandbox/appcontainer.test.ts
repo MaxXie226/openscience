@@ -153,3 +153,47 @@ test("the self-test proves the child is in a container before judging containmen
   // when the real fault is upstream of the policy.
   expect(body.indexOf("whoami /groups")).toBeLessThan(body.indexOf("write inside the workspace succeeds"))
 })
+
+test("the child inherits the launcher's std handles", async () => {
+  // `bInheritHandles: false` with no STARTF_USESTDHANDLES was silently fatal:
+  // the launcher runs with its stdout on a pipe, so a child inheriting nothing
+  // had nowhere to write and EVERY sandboxed command came back empty. The first
+  // Windows self-test read that empty stdout, found no package SID, and
+  // reported the container as not applied — a launcher bug wearing a policy
+  // bug's clothes. Not test-only: pip progress and every tool result cross here.
+  const source = await Bun.file(new URL("../../src/sandbox/appcontainer.ts", import.meta.url).pathname).text()
+  const body = source.slice(source.indexOf("export function launch"))
+  // bInheritHandles is the last argument before the creation flags. Slicing to
+  // the first ")" would land inside `ffi.ptr(line)`, so bound it on the flags.
+  const create = body.slice(body.indexOf("kernel.CreateProcessW"), body.indexOf("EXTENDED_STARTUPINFO_PRESENT |"))
+  expect(create).toContain("true,")
+  expect(create).not.toContain("false,")
+  expect(body).toContain("STARTF_USESTDHANDLES")
+  // Handles we were given are not necessarily marked inheritable in us.
+  expect(body).toContain("SetHandleInformation")
+  // The flag must not be set without handles behind it, or the child gets no
+  // stdout at all — the same failure by another route.
+  expect(body.indexOf("if (stdout && stderr)")).toBeLessThan(body.indexOf("STARTF_USESTDHANDLES, true"))
+})
+
+test("the containment check distinguishes a silent child from an uncontained one", async () => {
+  // Same defect the installer's error message had: asserting one cause when
+  // two produce the identical observable.
+  const text = await Bun.file(new URL("../../src/sandbox/sandbox.ts", import.meta.url).pathname).text()
+  const body = text.slice(text.indexOf("export async function selfTest"))
+  const check = body.slice(body.indexOf("whoami /groups"), body.indexOf("write inside the workspace succeeds"))
+  expect(check).toContain("produced no output at all")
+  expect(check).toContain("SECURITY_CAPABILITIES did not take effect")
+  // The child's own stderr is the launcher's error message, and it names which
+  // Win32 call failed. Dropping it was what made the first failure unreadable.
+  expect(check).toContain("token.stderr")
+  // A Windows console decodes our UTF-8 as its OEM code page, so what this
+  // check PRINTS stays ASCII. Comments are not printed, so judge only the
+  // string literals.
+  const printed = check
+    .split("\n")
+    .filter((l) => !l.trimStart().startsWith("//"))
+    .join("\n")
+  // eslint-disable-next-line no-control-regex
+  expect(printed).not.toMatch(/[^\x00-\x7F]/)
+})
