@@ -142,7 +142,11 @@ export const SkillTool = Tool.define("skill", async (ctx) => {
         ? (accessibleByName.get(params.name) ?? accessibleByName.get(SkillCatalog.resolve(params.name)))
         : undefined
       if (params.query && !selected) {
-        const matched = searchSkills(params.query, candidates)
+        // searchSkills caps at 8 by default, and a bare list of 8 reads as
+        // "these are the matches" rather than "the best 8 of many". Rank the
+        // whole candidate set so the note can say how many were dropped.
+        const ranked = searchSkills(params.query, candidates, candidates.length)
+        const matched = ranked.slice(0, 8)
         if (matched.length === 0) {
           throw new Error(`No skills matched "${params.query}". Continue without a skill or try a narrower capability.`)
         }
@@ -152,9 +156,10 @@ export const SkillTool = Tool.define("skill", async (ctx) => {
               `- **${skill.name}** (${skill.category ?? "other"}): ${skill.description.slice(0, 180)}${skill.description.length > 180 ? "..." : ""}`,
           )
           .join("\n")
+        const dropped = ranked.length - matched.length
         return {
           title: `Skill matches: ${params.query}`,
-          output: `## Ranked skill matches\n\n${params.name ? `Skill "${params.name}" is unavailable. Searched the provided query instead. ` : ""}No skill instructions have been loaded. Load an applicable result by calling this tool with its exact name.\n\n${listing}`,
+          output: `## Ranked skill matches\n\n${params.name ? `Skill "${params.name}" is unavailable. Searched the provided query instead. ` : ""}No skill instructions have been loaded. Load an applicable result by calling this tool with its exact name.${dropped ? ` Showing ${matched.length} of ${ranked.length} matches; narrow the query to see the rest.` : ""}\n\n${listing}`,
           metadata: {
             name: params.query,
             dir: "",

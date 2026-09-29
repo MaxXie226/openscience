@@ -316,6 +316,9 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **A broad skill search now says how many matches it left out.** Searching
+  returned the best eight with nothing to indicate there were more, which read
+  as the whole set. It now reports the total and suggests narrowing the query.
 - **Shell scripts and git hooks keep LF line endings on Windows checkouts.**
   With Git for Windows' default `core.autocrlf=true` they were checked out with
   CRLF and failed under bash with `$'\r': command not found`.

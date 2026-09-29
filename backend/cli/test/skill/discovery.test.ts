@@ -86,6 +86,15 @@ test("search respects category and browsing remains bounded with explicit pagina
       expect(first.metadata.matches).toHaveLength(40)
       expect(next.metadata.matches).toHaveLength(3)
       expect(new Set([...first.metadata.matches, ...next.metadata.matches]).size).toBe(43)
+      // A broad query matches far more than the 8 the tool returns, and the
+      // output has to say so rather than presenting 8 as the whole set.
+      const broad = await tool.execute({ query: "biology" }, context())
+      expect(broad.metadata.matches).toHaveLength(8)
+      expect(broad.output).toContain(`of 43 matches`)
+      expect(broad.output).toContain("narrow the query")
+      // A narrow query that fits inside the cap adds no such note.
+      const narrow = await tool.execute({ query: "RNA QC", category: "chemistry" }, context())
+      expect(narrow.output).not.toContain("narrow the query")
     },
   })
 })
