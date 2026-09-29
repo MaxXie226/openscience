@@ -43,6 +43,34 @@ interface McpCodeResponse {
   }
 }
 
+/** The request asks for `application/json` first, and a Streamable HTTP server may
+ *  answer with exactly that, so only reading `data:` frames reported a perfectly
+ *  good search as empty. A rejected call arrives as a JSON-RPC `error` object
+ *  with no `result` at all, which fell through to the same "nothing found"
+ *  text. Returns undefined only when the reply really carried no content. */
+export function parseCodeReply(responseText: string, contentType: string | null) {
+  const mime = (contentType ?? "").split(";")[0]!.trim().toLowerCase()
+  const frames =
+    mime === "application/json" || mime.endsWith("+json")
+      ? [responseText]
+      : responseText.split("\n").flatMap((line) => (line.startsWith("data:") ? [line.slice(5).replace(/^ /, "")] : []))
+  for (const frame of frames) {
+    const body = frame.trim()
+    // The terminal sentinel is not a message. Anything else that is not JSON is
+    // left to throw, so a broken reply surfaces instead of reading as empty.
+    if (!body || body === "[DONE]") continue
+    const data = JSON.parse(body) as McpCodeResponse
+    if (data.error) throw new Error(`Code search error (${data.error.code}): ${data.error.message}`)
+    const text = (data.result?.content ?? [])
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n\n")
+    if (data.result?.isError) throw new Error(`Code search error: ${text || "the search tool reported a failure"}`)
+    if (text) return text
+  }
+  return undefined
+}
+
 export const CodeSearchTool = Tool.define("codesearch", {
   description: DESCRIPTION,
   parameters: z.object({
@@ -109,27 +137,14 @@ export const CodeSearchTool = Tool.define("codesearch", {
         throw new Error(`Code search error (${response.status}): ${errorText}`)
       }
 
+      const contentType = response.headers.get("content-type")
       const responseText = await response.text()
-
-      // Parse SSE response
-      const lines = responseText.split("\n")
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data: McpCodeResponse = JSON.parse(line.substring(6))
-          if (data.error) throw new Error(`Code search error (${data.error.code}): ${data.error.message}`)
-          const text = (data.result?.content ?? [])
-            .filter((part) => part.type === "text")
-            .map((part) => part.text)
-            .join("\n\n")
-          if (data.result?.isError)
-            throw new Error(`Code search error: ${text || "the search tool reported a failure"}`)
-          if (text) {
-            return {
-              output: text,
-              title: `Code search: ${params.query}`,
-              metadata: {},
-            }
-          }
+      const found = parseCodeReply(responseText, contentType)
+      if (found) {
+        return {
+          output: found,
+          title: `Code search: ${params.query}`,
+          metadata: {},
         }
       }
 
