@@ -26,7 +26,10 @@ export namespace Storage {
     }),
   )
 
-  const MIGRATIONS: Migration[] = [
+  /** Exported so a test can run the chain against a throwaway directory: the
+   *  marker is process-global state, so the only way to prove a damaged record
+   *  does not wedge the chain is to run the migration itself. */
+  export const MIGRATIONS: Migration[] = [
     async (dir) => {
       const project = path.resolve(dir, "../project")
       if (!(await Filesystem.isDir(project))) return
@@ -44,7 +47,14 @@ export namespace Storage {
             cwd: path.join(project, projectDir),
             absolute: true,
           })) {
-            const json = await Bun.file(msgFile).json()
+            const json = await Bun.file(msgFile)
+              .json()
+              // One damaged record must cost that record. A throw here fails the
+              // migration, and the marker only advances past a migration that
+              // completes, so every migration appended after this one would
+              // silently never run again.
+              .catch(() => undefined)
+            if (!json) continue
             worktree = json.path?.root
             if (worktree) break
           }
@@ -88,7 +98,10 @@ export namespace Storage {
               sessionFile,
               dest,
             })
-            const session = await Bun.file(sessionFile).json()
+            const session = await Bun.file(sessionFile)
+              .json()
+              .catch(() => undefined)
+            if (!session) continue
             await Bun.write(dest, JSON.stringify(session))
             log.info(`migrating messages for session ${session.id}`)
             for await (const msgFile of new Bun.Glob(`storage/session/message/${session.id}/*.json`).scan({
@@ -100,7 +113,10 @@ export namespace Storage {
                 msgFile,
                 dest,
               })
-              const message = await Bun.file(msgFile).json()
+              const message = await Bun.file(msgFile)
+                .json()
+                .catch(() => undefined)
+              if (!message) continue
               await Bun.write(dest, JSON.stringify(message))
 
               log.info(`migrating parts for message ${message.id}`)
@@ -111,7 +127,10 @@ export namespace Storage {
                 },
               )) {
                 const dest = path.join(dir, "part", message.id, path.basename(partFile))
-                const part = await Bun.file(partFile).json()
+                const part = await Bun.file(partFile)
+                  .json()
+                  .catch(() => undefined)
+                if (!part) continue
                 log.info("copying", {
                   partFile,
                   dest,
@@ -128,8 +147,10 @@ export namespace Storage {
         cwd: dir,
         absolute: true,
       })) {
-        const session = await Bun.file(item).json()
-        if (!session.projectID) continue
+        const session = await Bun.file(item)
+          .json()
+          .catch(() => undefined)
+        if (!session?.projectID) continue
         if (!session.summary?.diffs) continue
         const { diffs } = session.summary
         await Bun.file(path.join(dir, "session_diff", session.id + ".json")).write(JSON.stringify(diffs))
