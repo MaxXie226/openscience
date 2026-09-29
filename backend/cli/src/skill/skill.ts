@@ -560,8 +560,9 @@ export namespace Skill {
         })
         installedCount++
         // SKILL_GLOB matches <installedDir>/<ns>/skills/<name>/SKILL.md.
-        const rel = match.slice(installedDir.length + 1)
-        const segments = rel.split("/")
+        // The glob yields native separators, so a hardcoded "/" reads one
+        // segment holding the whole relative path and the namespace misses.
+        const segments = path.relative(installedDir, match).split(path.sep)
         const ns = segments[0]
         const skillName = segments[2]
         const entrySet = entriesByNs.get(ns)

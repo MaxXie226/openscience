@@ -316,6 +316,11 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **Installed skills honour their manifest's entry list on Windows.** Which
+  installed skills count as commands was decided by splitting the path on `/`,
+  which never matched on Windows, so every installed skill appeared as a
+  command whether or not the manifest listed it — including the internal
+  helpers a URL install marks as not yours to run.
 - **`--port=5555` is no longer ignored in favour of a configured port.** The
   check for an explicitly passed port only matched the space-separated
   spelling, so the `=` form silently bound to the port in your config instead.
