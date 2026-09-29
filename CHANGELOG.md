@@ -316,6 +316,18 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **A malformed patch is no longer reported as applied.** An
+  `*** Update File:` section with no `@@` header parsed to zero chunks, so
+  `deriveNewContentsFromChunks` wrote the file's own bytes back and the tool
+  reported a success with an empty diff. A hunk line that lost its leading space
+  or sign was dropped from both sides of the hunk, and the remaining context was
+  then matched with progressively looser passes, so an edit could land somewhere
+  other than where it was asked for. Both shapes are now rejected as malformed
+  instead of applied. A line that is merely indented is still read as a context
+  line, which is what the format means, and a bare empty line is still blank
+  context, so a blank line before `*** End Patch` or the next file keeps
+  applying. An update section with neither a hunk nor a `*** Move to:` is
+  rejected too.
 - **The session spend figure no longer counts reasoning tokens twice, and no
   longer drops them for Gemini.** A reasoning model's reasoning tokens are a
   subset of its output rather than an extra quantity, so adding them on top of
