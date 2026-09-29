@@ -410,6 +410,13 @@ public 50 the old detector named an example's `samples.csv` and the input
   projects yet", so opening a folder whose record already existed minted a
   second identity for it and left its history stranded under the old one. The
   failure now surfaces instead of quietly forking the project.
+- **A fuzzy edit no longer deletes the indentation it matched.** When a model
+  re-quoted a line with slightly different internal spacing, the edit matched the
+  whole line, and the replacement had been written for the text that was quoted
+  rather than the padding around it — so an indented statement was replaced at
+  column 0 and the file stopped parsing. The edit now applies where the model
+  looked, at the indentation the file already had; a deliberate outdent is
+  unaffected.
 - **A slash command keeps the dollar signs you typed.** `$ARGUMENTS` was
   substituted with a string replacement, so `$$` collapsed to `$` (display math
   became inline math), `$&` came back as the placeholder itself and `$'`
