@@ -38,6 +38,10 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ### Added
 
+- **An NMR compound-inference skill.** `nmr-compound-inference` reads 1D ¹H or
+  ¹³C spectra (Bruker, NMRPipe or two-column text) with nmrglue, plots them with a
+  peak table, compares shifts against BMRB, HMDB, SDBS and nmrshiftdb2, and writes
+  a ranked candidate report with its evidence and caveats. Contributed by Robin Wu.
 - **openscience.sh/benchmark.** The launch report: Terminal-Bench Science, Terminal-Bench 4.0 (science) and BiomniBench-DA against every public entry, with the figures, traces and method. OpenScience Bench, our end-to-end research benchmark, is reported pass@3 for every entry. The front page's benchmark figures show all four.
 - **The context panel counts the tool definitions and matches the provider's cache.** The
   "in progress" estimate summed only the message log, so it read well under the request the
