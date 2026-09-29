@@ -157,6 +157,11 @@ const MAX_INLINE_JSON_CHARS = 40_000
 /** Read one selection path: dots for keys, [n] for an index, [-1] for the last. */
 export function pick(value: unknown, selector: string): unknown {
   const steps = selector.match(/[^.[\]]+|\[-?\d+\]/g) ?? []
+  // A selector made only of separators (".", "..", "[") tokenizes to nothing, so
+  // the walk below would have no step to take and return the whole document.
+  // That reads to the caller as a narrow selection that succeeded, and it is
+  // the one note that would have told the model to retry with a real path.
+  if (!steps.length) return undefined
   let current: unknown = value
   for (const step of steps) {
     if (current === undefined || current === null) return undefined

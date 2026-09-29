@@ -316,6 +316,11 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **A web fetch that selected a path of only dots no longer returns the whole
+  page.** A selection like `.` or `..` names no field, so the fetch handed back
+  the entire document and still reported "selected 1 path", with the "not found"
+  note that would have pointed at the mistake suppressed. Such a selection now
+  reports the path as not found, like any other bad one.
 - **Truncated output no longer reports one line more than it removed.** Any
   tool output that ends in a newline was split into an extra empty line, which
   the preview kept and the count included, so a 100-line file truncated to 10

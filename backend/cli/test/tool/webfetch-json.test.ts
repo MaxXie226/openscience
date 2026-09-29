@@ -21,6 +21,18 @@ describe("webfetch JSON shaping", () => {
     expect(pick(pypi, "urls.filename")).toBeUndefined()
   })
 
+  test("a selector of only separators names no path", () => {
+    // The tokenizer matches neither a key nor an index, so the walk has no
+    // step to take. Returning the document would make shapeJson report a
+    // narrow selection that never happened.
+    expect(pick(pypi, ".")).toBeUndefined()
+    expect(pick(pypi, "..")).toBeUndefined()
+    expect(pick(pypi, "[")).toBeUndefined()
+    const shaped = shapeJson(JSON.stringify(pypi), ["."])!
+    expect(JSON.parse(shaped.output)).toEqual({})
+    expect(shaped.note).toContain("not found: .")
+  })
+
   test("a selection keeps only the asked paths and names the ones not found", () => {
     const content = JSON.stringify(pypi)
     const shaped = shapeJson(content, ["info.version", "info.requires_python", "info.summary"])!
