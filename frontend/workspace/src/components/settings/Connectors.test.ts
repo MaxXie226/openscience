@@ -55,6 +55,17 @@ describe("Connector Settings form behavior", () => {
     ).toThrow("Timeout must be a positive whole number")
   })
 
+  test("keeps a tool-selection query and refuses a credential query the way the server does", () => {
+    const url = "https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa"
+    expect(buildConnectorConfig({ ...blankConnectorForm("remote"), url })).toMatchObject({ type: "remote", url })
+    expect(() =>
+      buildConnectorConfig({ ...blankConnectorForm("remote"), url: "https://mcp.exa.ai/mcp?exaApiKey=abc123" }),
+    ).toThrow('query parameter "exaApiKey" looks like a credential; send it as a request header instead')
+    expect(() =>
+      buildConnectorConfig({ ...blankConnectorForm("remote"), url: "https://mcp.example.org/mcp#token" }),
+    ).toThrow("fragment")
+  })
+
   test("prefills reviewed catalog setup without saving or enabling it", () => {
     const form = connectorFormFromCatalog({
       type: "remote",

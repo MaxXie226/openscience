@@ -1,4 +1,5 @@
 import type { Config } from "@synsci/sdk/v2/client"
+import { McpUrl } from "@synsci/util/mcp-url"
 import { formatConnectorCommand, parseConnectorCommand } from "./connector-command"
 
 type McpConfig = NonNullable<Config["mcp"]>[string]
@@ -241,6 +242,8 @@ export function buildConnectorConfig(state: ConnectorFormState): ConfiguredMcp {
     }
   }
   if (!URL.canParse(state.url.trim())) throw new Error("Remote URL is invalid")
+  const problem = McpUrl.endpointProblem(state.url.trim())
+  if (problem) throw new Error(problem)
   const previous = state.previous?.type === "remote" ? state.previous : undefined
   const headers = restoreRecord(parseRecord(state.headers, "Headers"), previous?.headers)
   const oauth = typeof previous?.oauth === "object" ? previous.oauth : undefined

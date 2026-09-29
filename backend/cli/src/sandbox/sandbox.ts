@@ -785,8 +785,14 @@ export namespace Sandbox {
   // Warn only once per process so every command doesn't repeat the same notice.
   const warned = { unavailable: false }
 
-  function unavailableMessage(): string {
-    return `Sandbox is enabled but unavailable on this machine (${describe().reason}). Running the command WITHOUT isolation. Install the backend, or set sandbox.onUnavailable to "error" to refuse instead.`
+  function unavailableWarning(): string {
+    return `Sandbox is enabled but unavailable on this machine (${describe().reason}). Running the command WITHOUT isolation. Install the backend, or set Customize → Sandbox → Fallback behavior to Refuse (sandbox.onUnavailable "error") to refuse instead.`
+  }
+
+  /** What to tell the user when no backend exists and Fallback behavior is
+   * Refuse: nothing was spawned, so the text must not suggest it ran. */
+  export function refusal(subject = "this process"): string {
+    return `OpenScience did not start ${subject}: the sandbox is on, this machine has no sandbox backend (${describe().reason}), and Fallback behavior is set to Refuse. To run it without isolation, open Customize → Sandbox and set Fallback behavior to Warn & run, or turn off Sandbox agent commands (sandbox.onUnavailable or sandbox.enabled in the global config).`
   }
 
   /**
@@ -800,8 +806,8 @@ export namespace Sandbox {
     const b = backend()
     if (b !== "none") return { backend: b }
     const mode = options.onUnavailable ?? "warn"
-    if (mode === "error") throw new UnavailableError(unavailableMessage())
-    const warning = mode === "warn" && !warned.unavailable ? unavailableMessage() : undefined
+    if (mode === "error") throw new UnavailableError(refusal())
+    const warning = mode === "warn" && !warned.unavailable ? unavailableWarning() : undefined
     if (warning) {
       warned.unavailable = true
       log.warn("sandbox enabled but unavailable", { platform: process.platform })

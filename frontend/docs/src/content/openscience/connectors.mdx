@@ -33,7 +33,7 @@ MCP is the Model Context Protocol, a way for tools to connect to an agent. For a
 
 Replace the example URL with your server's actual endpoint. Enable the connection after reviewing it. If the server requires sign-in, use the offered authorization flow.
 
-For a service that documents token authentication, add its required header through the form or an environment reference. Do not put private credentials in a URL.
+For a service that documents token authentication, add its required header through the form or an environment reference. Do not put private credentials in a URL. Query parameters that select tools or options, such as `https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa`, are kept as written. A parameter named like a credential (`api_key`, `token`, `secret`, `Authorization`, and similar) is refused with its name, so send that value as a header instead.
 
 ## Local MCP server
 
@@ -54,6 +54,8 @@ A local connection starts a command on your machine:
 Replace the example command with an installed MCP server that supports the expected transport. Use separate array entries for the executable and each argument.
 
 The required language runtime and dependencies must be available. A local server is software you choose to run; review it before enabling it.
+
+A local server starts inside the execution sandbox. On a machine without a sandbox backend, such as Windows, OpenScience does not start it while **Customize → Sandbox → Sandbox agent commands** is on and **Fallback behavior** is **Refuse**, and the connector reports why. Use the server's remote MCP URL if it offers one, or choose **Warn & run** to start local servers without isolation. The project's **Action approval** mode does not change this.
 
 ## CLI commands
 

@@ -1024,15 +1024,21 @@ export namespace MCP {
           throw error
         }
       } catch (error) {
+        const message =
+          error instanceof Sandbox.UnavailableError
+            ? `${Sandbox.refusal(`local MCP server "${key}"`)} To keep isolation, connect to the server's remote MCP URL instead if it offers one.`
+            : error instanceof Error
+              ? error.message
+              : String(error)
         log.error("local mcp startup failed", {
           key,
           command: mcp.command,
           cwd,
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
         })
         status = {
           status: "failed" as const,
-          error: OpenScience.redactSecrets(error instanceof Error ? error.message : String(error)),
+          error: OpenScience.redactSecrets(message),
         }
       }
     }

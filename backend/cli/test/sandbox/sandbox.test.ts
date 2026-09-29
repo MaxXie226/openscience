@@ -5,6 +5,7 @@ import path from "path"
 import { ProcessIdentity } from "../../src/process/process-identity"
 import { Sandbox } from "../../src/sandbox/sandbox"
 import { tmpdir } from "../fixture/fixture"
+import { spawn } from "../fixture/spawn"
 
 const shell = "/bin/sh"
 
@@ -650,6 +651,45 @@ describe("Sandbox.plan", () => {
   test("onUnavailable:error throws when no backend is available", () => {
     if (Sandbox.available()) return // only meaningful without a backend
     expect(() => Sandbox.plan({ ...base, options: { enabled: true, onUnavailable: "error" } })).toThrow()
+  })
+
+  test("without a backend, Refuse says nothing started and Warn & run says it runs unisolated", async () => {
+    await using tmp = await tmpdir()
+    const empty = path.join(tmp.path, "empty-path")
+    fs.mkdirSync(empty)
+    const runner = path.join(tmp.path, "no-backend.ts")
+    await Bun.write(
+      runner,
+      `
+import { Sandbox } from ${JSON.stringify(new URL("../../src/sandbox/sandbox.ts", import.meta.url).href)}
+const input = { file: process.execPath, args: ["-e", "1"], workspace: [process.argv[2]] }
+const refused = (() => {
+  try {
+    Sandbox.wrapArgv({ ...input, options: { enabled: true, onUnavailable: "error" } })
+  } catch (error) {
+    return { name: error.name, message: error.message }
+  }
+})()
+const warned = Sandbox.wrapArgv({ ...input, options: { enabled: true, onUnavailable: "warn" } })
+process.stdout.write(JSON.stringify({ backend: Sandbox.backend(), refused, warned: { sandboxed: warned.sandboxed, warning: warned.warning } }))
+`,
+    )
+    // An empty PATH hides sandbox-exec and bwrap, which is the Windows situation.
+    const proc = spawn([process.execPath, runner, tmp.path], { stdout: "pipe", stderr: "pipe", env: { PATH: empty } })
+    const [output, error, exit] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    expect(exit, error).toBe(0)
+    const result = JSON.parse(output)
+    expect(result.backend).toBe("none")
+    expect(result.refused.name).toBe("SandboxUnavailableError")
+    expect(result.refused.message).toContain("did not start this process")
+    expect(result.refused.message).toContain("Customize → Sandbox")
+    expect(result.refused.message).not.toContain("WITHOUT isolation")
+    expect(result.warned.sandboxed).toBe(false)
+    expect(result.warned.warning).toContain("WITHOUT isolation")
   })
 
   test("makes the workspace writable but not an out-of-workspace cwd", () => {

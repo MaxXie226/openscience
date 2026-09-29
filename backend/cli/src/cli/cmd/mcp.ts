@@ -1,5 +1,6 @@
 import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
+import { McpUrl } from "@synsci/util/mcp-url"
 import { UI } from "../ui"
 import { MCP } from "../../mcp"
 import { McpAuth } from "../../mcp/auth"
@@ -518,8 +519,7 @@ const McpAddCommand = cmd({
             validate: (x) => {
               if (!x) return "Required"
               if (x.length === 0) return "Required"
-              const isValid = URL.canParse(x)
-              return isValid ? undefined : "Invalid URL"
+              return McpUrl.endpointProblem(x)
             },
           })
           if (prompts.isCancel(url)) throw new UI.CancelledError()

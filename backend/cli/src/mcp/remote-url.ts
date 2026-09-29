@@ -1,38 +1,21 @@
-const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1"])
+import { McpUrl } from "@synsci/util/mcp-url"
 
 export namespace McpRemoteUrl {
-  function isLoopback(value: URL): boolean {
-    return LOOPBACK.has(value.hostname.toLowerCase())
-  }
-
   export function network(
     input: string | URL,
     label = "Remote MCP URL",
     options: { allowLoopbackHttp?: boolean } = {},
   ): URL {
-    const value = input instanceof URL ? new URL(input) : new URL(input)
-    const secure = value.protocol === "https:"
-    const loopback = options.allowLoopbackHttp === true && value.protocol === "http:" && isLoopback(value)
-    if (!secure && !loopback) throw new Error(`${label} must use HTTPS (loopback HTTP is allowed for development)`)
-    if (value.username || value.password) throw new Error(`${label} must not contain URL credentials`)
+    const value = new URL(input)
+    const problem = McpUrl.networkProblem(value, label, options.allowLoopbackHttp === true)
+    if (problem) throw new Error(problem)
     return value
   }
 
   export function endpoint(input: string | URL): URL {
-    const value = network(input, "Remote MCP URL", { allowLoopbackHttp: true })
-    if (value.search || value.hash) {
-      throw new Error("Remote MCP endpoint URLs must not contain query credentials or fragments; use headers instead")
-    }
-    return value
-  }
-
-  export function validEndpoint(input: string): boolean {
-    try {
-      endpoint(input)
-      return true
-    } catch {
-      return false
-    }
+    const problem = McpUrl.endpointProblem(input)
+    if (problem) throw new Error(problem)
+    return new URL(input)
   }
 
   /** Discovered OAuth URLs may use loopback HTTP only when the configured MCP
@@ -41,7 +24,7 @@ export namespace McpRemoteUrl {
   export function discovered(input: string | URL, endpoint: string | URL, label: string): URL {
     const configured = McpRemoteUrl.endpoint(endpoint)
     return network(input, label, {
-      allowLoopbackHttp: configured.protocol === "http:" && isLoopback(configured),
+      allowLoopbackHttp: configured.protocol === "http:" && McpUrl.loopback(configured),
     })
   }
 

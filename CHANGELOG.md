@@ -326,6 +326,16 @@ public 50 the old detector named an example's `samples.csv` and the input
   Chinese.** Provider API keys and every connector heading, status, form,
   dialog and message were hard-coded English, so the Chinese interface mixed
   both languages there (#774).
+- **Remote MCP URLs can carry a tool selection.** Any query string was refused,
+  so a URL such as `https://mcp.exa.ai/mcp?tools=web_search_exa,web_fetch_exa`
+  could not be added unchanged. Query parameters are now kept; one named like a
+  credential (`api_key`, `token`, `Authorization`, …) is still refused, with its
+  name and a pointer to headers, in the connector form, `mcp add` and the config.
+- **A refused local MCP server says it was not started.** On a machine with no
+  sandbox backend, such as Windows, the connector failed with "Running the
+  command WITHOUT isolation", although nothing had run. It now says the server
+  was not started and why, and points to Customize → Sandbox (Fallback behavior
+  or Sandbox agent commands) or the server's remote MCP URL.
 - **OpenScience installs and runs on Linux kernels from 3.10.** The installer and
   the launcher refused any kernel below 5.1, a floor copied from an older Bun
   release, so CentOS and RHEL 8 (kernel 4.18) could not install or start it.

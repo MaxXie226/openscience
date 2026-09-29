@@ -10,6 +10,7 @@ import { Global } from "../global"
 import fs from "fs/promises"
 import { lazy } from "@synsci/util/lazy"
 import { NamedError } from "@synsci/util/error"
+import { McpUrl } from "@synsci/util/mcp-url"
 import { Flag } from "../flag/flag"
 import { Auth } from "../auth"
 import {
@@ -554,9 +555,9 @@ export namespace Config {
       type: z.literal("remote").describe("Type of MCP server connection"),
       url: z
         .string()
-        .refine(McpRemoteUrl.validEndpoint, {
-          message:
-            "Remote MCP URLs require HTTPS (loopback HTTP allowed) and must not contain credentials or query data",
+        .superRefine((url, ctx) => {
+          const problem = McpUrl.endpointProblem(url)
+          if (problem) ctx.addIssue({ code: "custom", message: problem })
         })
         .describe("HTTPS URL of the remote MCP server"),
       enabled: z.boolean().optional().describe("Enable or disable the MCP server on startup"),
