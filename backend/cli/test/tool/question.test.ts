@@ -57,6 +57,21 @@ describe("tool.question", () => {
     expect(result.title).toBe("Asked 1 question")
   })
 
+  test("refuses an empty question list instead of answering nothing", async () => {
+    const tool = await QuestionTool.init()
+    // An empty list passes the find() guard below it, so without a check the
+    // tool either reports a decision that was never made or asks the user a
+    // question with nothing in it.
+    await expect(tool.execute({ reason: "consequential", questions: [] }, ctx)).rejects.toThrow("at least one question")
+    await expect(
+      tool.execute(
+        { reason: "consequential", questions: [] },
+        { ...ctx, extra: { delegationSettings: { level: "standard", autonomy: "autonomous" } } },
+      ),
+    ).rejects.toThrow("at least one question")
+    expect(askSpy).not.toHaveBeenCalled()
+  })
+
   test("should now pass with a header longer than 12 but less than 30 chars", async () => {
     const tool = await QuestionTool.init()
     const questions = [

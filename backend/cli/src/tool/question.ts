@@ -74,6 +74,11 @@ export const QuestionTool = Tool.define("question", {
     questions: z.array(Question.Info.omit({ custom: true })).describe("Questions to ask"),
   }),
   async execute(params, ctx): Promise<QuestionDecisionResult> {
+    if (!params.questions.length) {
+      throw new Error(
+        "The question list was empty, so nothing was asked and nothing was decided. Retry with at least one question and the options to choose from.",
+      )
+    }
     const autonomy = MessageV2.resolveDelegationSettings(ctx.extra?.delegationSettings).autonomy
     if (params.reason !== "missing_authority") {
       const invalid = params.questions.find(

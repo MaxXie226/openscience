@@ -316,6 +316,11 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **Asking no questions at all is now refused instead of answered.** An empty
+  question list slipped past the check that requires a recommended option, so
+  the turn either reported an assumption it had not recorded or opened a prompt
+  card with nothing on it and waited. An empty list is now refused with a note
+  to retry.
 - **A web fetch that selected a path of only dots no longer returns the whole
   page.** A selection like `.` or `..` names no field, so the fetch handed back
   the entire document and still reported "selected 1 path", with the "not found"
