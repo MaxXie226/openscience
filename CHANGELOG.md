@@ -316,6 +316,11 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **Truncated output no longer reports one line more than it removed.** Any
+  tool output that ends in a newline was split into an extra empty line, which
+  the preview kept and the count included, so a 100-line file truncated to 10
+  announced 91 lines truncated. The count now matches what was actually
+  dropped. The full output saved to disk is unchanged.
 - **Importing a broken session file now says so and exits non-zero.** A file
   that was not valid JSON was reported as "File not found", sending you looking
   for a path you had just typed, and the command still exited successfully. It

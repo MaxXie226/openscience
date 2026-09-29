@@ -32,6 +32,17 @@ describe("Truncate", () => {
       expect(result.content).toContain("...90 lines truncated...")
     })
 
+    test("counts a trailing newline as no line of its own", async () => {
+      // 100 lines that end in a newline. split("\n") yields a 101st empty
+      // element, which would be reported as a removed line and kept as the
+      // last entry of the preview.
+      const lines = Array.from({ length: 100 }, (_, i) => `line${i}`).join("\n") + "\n"
+      const result = await Truncate.output(lines, { maxLines: 10 })
+
+      expect(result.truncated).toBe(true)
+      expect(result.content).toContain("...90 lines truncated...")
+    })
+
     test("truncates by byte count", async () => {
       const content = "a".repeat(1000)
       const result = await Truncate.output(content, { maxBytes: 100 })

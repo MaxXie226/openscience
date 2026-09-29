@@ -99,7 +99,9 @@ export namespace Truncate {
     const maxLines = options.maxLines ?? MAX_LINES
     const maxBytes = options.maxBytes ?? MAX_BYTES
     const direction = options.direction ?? "head"
-    const lines = text.split("\n")
+    // A trailing newline makes split yield a phantom final element, which
+    // would be kept as an empty preview line and reported as a removed one.
+    const lines = text.endsWith("\n") ? text.slice(0, -1).split("\n") : text.split("\n")
     const totalBytes = Buffer.byteLength(text, "utf-8")
 
     if (lines.length <= maxLines && totalBytes <= maxBytes) {
