@@ -316,6 +316,10 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **Picking a folder by its `file://` link works on Windows.** A link to a
+  drive path was turned into a doubled drive letter and a link to a network
+  share lost its server, so the folder could not be selected. A stray `%` in a
+  link no longer fails the whole request on any platform.
 - **A malformed patch is no longer reported as applied.** An
   `*** Update File:` section with no `@@` header parsed to zero chunks, so
   `deriveNewContentsFromChunks` wrote the file's own bytes back and the tool
