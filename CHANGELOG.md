@@ -316,6 +316,12 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **A saved setting sticks when both `openscience.json` and
+  `openscience.jsonc` exist.** `openscience.json` now wins over
+  `openscience.jsonc` in your global config, as it already did in a project,
+  and the app saves into `openscience.json` whenever both are there. Before,
+  a project save went to the `.jsonc` file and `openscience.json` hid it on
+  the next load. With only one of the two files, saves still go to that file.
 - **A local MCP server without a command says so.** An entry whose `command`
   was empty, or began with an empty string, was launched with no program to run
   and failed as "Connection closed". It is no longer launched: the connector
