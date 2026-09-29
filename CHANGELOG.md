@@ -12,6 +12,11 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ### Changed
 
+- **The scanpy and AnnData skills keep raw counts in a layer.** Their workflows
+  now save counts to `layers["counts"]` before normalizing, while `adata.raw`
+  still holds log-normalized values for every gene so marker plots work after
+  the subset to highly variable genes. Batch integration examples keep the
+  inner join, and the outer join is explained with its zero-fill caveat.
 - **The "What's new" dialog is calmer and its notes read like prose.** More
   generous spacing and type, a quiet section eyebrow, soft hanging-dot bullets,
   and a de-emphasised "Don't show again" beside the primary action; each line
