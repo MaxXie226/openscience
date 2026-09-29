@@ -322,6 +322,10 @@ public 50 the old detector named an example's `samples.csv` and the input
   uses Exa's web search steered toward documentation and code examples, takes
   `numResults` (1-10) in place of `tokensNum`, and reports a server-side
   failure as a tool error.
+- **The Models and Connectors settings are fully translated in Simplified
+  Chinese.** Provider API keys and every connector heading, status, form,
+  dialog and message were hard-coded English, so the Chinese interface mixed
+  both languages there (#774).
 - **OpenScience installs and runs on Linux kernels from 3.10.** The installer and
   the launcher refused any kernel below 5.1, a floor copied from an older Bun
   release, so CentOS and RHEL 8 (kernel 4.18) could not install or start it.
