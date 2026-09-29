@@ -316,6 +316,10 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **Listing files now returns them in a stable order.** Files written at the
+  same moment ΓÇö by a checkout, a build, or a script ΓÇö share a timestamp, so
+  their order came from the filesystem and two identical searches could list
+  the same files differently. Equal timestamps are now ordered by path.
 - **Installed skills honour their manifest's entry list on Windows.** Which
   installed skills count as commands was decided by splitting the path on `/`,
   which never matched on Windows, so every installed skill appeared as a

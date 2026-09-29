@@ -57,7 +57,10 @@ export const GlobTool = Tool.define("glob", {
         mtime: stats,
       })
     }
-    files.sort((a, b) => b.mtime - a.mtime)
+    // One checkout or one write burst gives every match the same mtime, so
+    // without a tiebreak the order came from filesystem enumeration and two
+    // identical calls could return the same files in a different sequence.
+    files.sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path))
 
     const output = []
     if (files.length === 0) output.push("No files found")
