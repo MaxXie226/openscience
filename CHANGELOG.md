@@ -316,6 +316,10 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **Importing a broken session file now says so and exits non-zero.** A file
+  that was not valid JSON was reported as "File not found", sending you looking
+  for a path you had just typed, and the command still exited successfully. It
+  now distinguishes a missing file from an unreadable or wrongly shaped one.
 - **A requirements file with a comment or a blank line can now be installed.**
   Both were counted as package pins, so the check confirming every pinned wheel
   was downloaded rejected the file and the task environment was never built.
