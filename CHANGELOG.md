@@ -316,6 +316,11 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **A local MCP server without a command says so.** An entry whose `command`
+  was empty, or began with an empty string, was launched with no program to run
+  and failed as "Connection closed". It is no longer launched: the connector
+  fails with a message naming the server and its empty `command`, and the rest
+  of the config loads as before.
 - **Picking a folder by its `file://` link works on Windows.** A link to a
   drive path was turned into a doubled drive letter and a link to a network
   share lost its server, so the folder could not be selected. A stray `%` in a
