@@ -316,6 +316,10 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **`--port=5555` is no longer ignored in favour of a configured port.** The
+  check for an explicitly passed port only matched the space-separated
+  spelling, so the `=` form silently bound to the port in your config instead.
+  Both spellings now mean the same thing.
 - **Asking no questions at all is now refused instead of answered.** An empty
   question list slipped past the check that requires a recommended option, so
   the turn either reported an assumption it had not recorded or opened a prompt
