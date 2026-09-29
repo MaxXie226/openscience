@@ -316,6 +316,9 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **Shell scripts and git hooks keep LF line endings on Windows checkouts.**
+  With Git for Windows' default `core.autocrlf=true` they were checked out with
+  CRLF and failed under bash with `$'\r': command not found`.
 - **A saved setting sticks when both `openscience.json` and
   `openscience.jsonc` exist.** `openscience.json` now wins over
   `openscience.jsonc` in your global config, as it already did in a project,
