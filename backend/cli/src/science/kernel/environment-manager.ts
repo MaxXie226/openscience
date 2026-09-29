@@ -445,18 +445,25 @@ function condaArtifacts(lock: string) {
     })
 }
 
-function requirementArtifacts(requirements: string) {
+export function requirementArtifacts(requirements: string) {
   if (!requirements.trim()) return []
-  return requirements.split("\n").map((line) => {
-    const pin = line.trim().split(/\s+/u)[0]!
-    const offset = pin.indexOf("==")
-    return {
-      pin,
-      name: pin.slice(0, offset),
-      version: pin.slice(offset + 2),
-      hashes: [...line.matchAll(/--hash=sha256:([a-f0-9]{64})/gu)].map((match) => match[1]!),
-    }
-  })
+  // A comment or a blank line is not a pin. Counting one as a pin made the
+  // exact coverage check in verifiedWheels fail its own length test, so a
+  // requirements file with an ordinary header could never be installed.
+  return requirements
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"))
+    .map((line) => {
+      const pin = line.split(/\s+/u)[0]!
+      const offset = pin.indexOf("==")
+      return {
+        pin,
+        name: pin.slice(0, offset),
+        version: pin.slice(offset + 2),
+        hashes: [...line.matchAll(/--hash=sha256:([a-f0-9]{64})/gu)].map((match) => match[1]!),
+      }
+    })
 }
 
 async function ensureCondaArchives(digest: string, selected: CoreScienceCondaPlatform, lock: string) {

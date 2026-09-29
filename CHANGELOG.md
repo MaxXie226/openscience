@@ -316,6 +316,9 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **A requirements file with a comment or a blank line can now be installed.**
+  Both were counted as package pins, so the check confirming every pinned wheel
+  was downloaded rejected the file and the task environment was never built.
 - **A broad skill search now says how many matches it left out.** Searching
   returned the best eight with nothing to indicate there were more, which read
   as the whole set. It now reports the total and suggests narrowing the query.
