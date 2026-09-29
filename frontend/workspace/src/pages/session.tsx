@@ -106,8 +106,10 @@ const sessionSidebarKey = "openscience-session-sidebar-v1"
 const sessionSidebarWidthKey = "openscience-session-sidebar-width-v1"
 
 function readSessionSidebar() {
-  if (typeof localStorage === "undefined") return false
+  // Reading `localStorage` itself can throw when storage is blocked, so the
+  // existence check has to sit inside the guard too.
   try {
+    if (typeof localStorage === "undefined") return false
     return localStorage.getItem(sessionSidebarKey) === "collapsed"
   } catch {
     return false
@@ -121,8 +123,8 @@ function writeSessionSidebar(collapsed: boolean) {
 }
 
 function readSessionSidebarWidth() {
-  if (typeof localStorage === "undefined") return SIDEBAR_WIDTH.initial
   try {
+    if (typeof localStorage === "undefined") return SIDEBAR_WIDTH.initial
     const value = Number.parseFloat(localStorage.getItem(sessionSidebarWidthKey) ?? "")
     return Number.isFinite(value) ? clampSidebarWidth(value) : SIDEBAR_WIDTH.initial
   } catch {

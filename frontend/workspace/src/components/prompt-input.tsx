@@ -945,7 +945,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onSelect: handleConversationSelect,
   })
 
-  const skillStorage = typeof localStorage === "undefined" ? undefined : localStorage
+  const skillStorage = (() => {
+    try {
+      return globalThis.localStorage
+    } catch {
+      return undefined
+    }
+  })()
   const [skillPreferenceRevision, setSkillPreferenceRevision] = createSignal(0)
   onMount(() => {
     const refresh = () => setSkillPreferenceRevision((value) => value + 1)

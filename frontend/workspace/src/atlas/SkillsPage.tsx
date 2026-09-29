@@ -82,8 +82,8 @@ const FLAT_ROWS = 120
 
 function cachedSkills(key: string) {
   if (memorySkillCache.has(key)) return memorySkillCache.get(key)!
-  if (typeof sessionStorage === "undefined") return []
   try {
+    if (typeof sessionStorage === "undefined") return []
     const parsed = JSON.parse(sessionStorage.getItem(key) ?? "null") as { skills?: Skill[] } | null
     if (!Array.isArray(parsed?.skills)) return []
     memorySkillCache.set(key, parsed.skills)
@@ -95,8 +95,8 @@ function cachedSkills(key: string) {
 
 function rememberSkills(key: string, skills: Skill[]) {
   memorySkillCache.set(key, skills)
-  if (typeof sessionStorage === "undefined") return
   try {
+    if (typeof sessionStorage === "undefined") return
     sessionStorage.setItem(key, JSON.stringify({ skills }))
   } catch {
     // The in-memory cache still makes later Settings visits immediate.
@@ -244,7 +244,13 @@ export default function SkillsPage(props: { embedded?: boolean; services?: Skill
   const [busy, setBusy] = createSignal(false)
   const [flatRows, setFlatRows] = createSignal(FLAT_ROWS)
   const [openShelves, setOpenShelves] = createSignal<ReadonlySet<string>>(new Set())
-  const storage = typeof localStorage === "undefined" ? undefined : localStorage
+  const storage = (() => {
+    try {
+      return globalThis.localStorage
+    } catch {
+      return undefined
+    }
+  })()
   const [preferences, setPreferences] = createStore({
     view: "all" as SkillView,
     feedback: "",

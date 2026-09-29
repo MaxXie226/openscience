@@ -47,19 +47,19 @@ export function presetPaneWidth(
   return paneWidthForWorkspace((workspace - sidebar) * (preset === "inspector" ? 0.7 : 0.3), workspace, sidebar)
 }
 
-export function readPaneWidth(
-  key: string,
-  storage: Pick<Storage, "getItem" | "setItem"> = localStorage,
-  legacy: string[] = [],
-) {
+export function readPaneWidth(key: string, storage?: Pick<Storage, "getItem" | "setItem">, legacy: string[] = []) {
   const value = (() => {
     try {
-      const current = storage.getItem(key)
+      // Resolved here rather than as a default argument: a default parameter is
+      // evaluated at the call site, before this try can catch a throwing read.
+      const store = storage ?? (globalThis as { localStorage?: Storage }).localStorage
+      if (!store) return
+      const current = store.getItem(key)
       if (current !== null) return current
       for (const old of legacy) {
-        const saved = storage.getItem(old)
+        const saved = store.getItem(old)
         if (saved === null) continue
-        storage.setItem(key, saved)
+        store.setItem(key, saved)
         return saved
       }
     } catch {
@@ -72,8 +72,11 @@ export function readPaneWidth(
   return clampPaneWidth(width)
 }
 
-export function savePaneWidth(key: string, width: number, storage: Pick<Storage, "setItem"> = localStorage) {
+export function savePaneWidth(key: string, width: number, storage?: Pick<Storage, "setItem">) {
   try {
-    storage.setItem(key, String(clampPaneWidth(width)))
+    // Same reason as readPaneWidth: a default argument runs before the try.
+    const store = storage ?? (globalThis as { localStorage?: Storage }).localStorage
+    if (!store) return
+    store.setItem(key, String(clampPaneWidth(width)))
   } catch {}
 }
