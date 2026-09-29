@@ -316,6 +316,14 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **Searching the terminal highlights the text it actually matched.** The search
+  folded each line to lower case before looking for the query, and the offset it
+  found was an index into that folded line. Folding can change a line's length —
+  U+0130 lowercases to two code units — so a match in a line containing one was
+  reported at the wrong column and highlighted the wrong text. Offsets are now
+  translated back to the original line, and a match ending in an astral
+  character is no longer reported one code unit short, which cut the highlight
+  through the middle of an emoji.
 - **The desktop app starts when your profile path has non-ASCII characters.** The
   SDK sent the project directory in a request header as is, and a path such as
   `C:\Users\Пользователь\...` is not a valid header value, so the app failed at
