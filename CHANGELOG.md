@@ -316,6 +316,12 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **Code search works again, and a failed search reads as an error.** Exa
+  retired the code-context tool `codesearch` called, so every search returned
+  "Tool get_code_context_exa not found" as if it were the answer. The tool now
+  uses Exa's web search steered toward documentation and code examples, takes
+  `numResults` (1-10) in place of `tokensNum`, and reports a server-side
+  failure as a tool error.
 - **OpenScience installs and runs on Linux kernels from 3.10.** The installer and
   the launcher refused any kernel below 5.1, a floor copied from an older Bun
   release, so CentOS and RHEL 8 (kernel 4.18) could not install or start it.
