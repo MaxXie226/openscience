@@ -316,8 +316,20 @@ public 50 the old detector named an example's `samples.csv` and the input
 
 ### Fixed
 
+- **Security: a remote MCP server's refresh token and client secret are only
+  ever sent to the authorization server that issued them.** Before, every token
+  refresh re-read the resource's protected-resource metadata to find the
+  authorization server, so a resource that changed that metadata after you had
+  authorized it could receive your stored refresh token and OAuth client secret
+  at a server of its choosing. Credentials are now bound to the issuing server
+  and its token endpoint, the SDK's own auth flow is given that binding instead
+  of rediscovering, a browser flow keeps the server it redirected to through the
+  code exchange, and a resource that starts advertising a different server gets
+  a fresh user-visible authorization instead. Credentials stored before this
+  release are bound on their next successful refresh. Reported by Saku0512
+  (CWE-522).
 - **Listing files now returns them in a stable order.** Files written at the
-  same moment ΓÇö by a checkout, a build, or a script ΓÇö share a timestamp, so
+  same moment — by a checkout, a build, or a script — share a timestamp, so
   their order came from the filesystem and two identical searches could list
   the same files differently. Equal timestamps are now ordered by path.
 - **Installed skills honour their manifest's entry list on Windows.** Which

@@ -190,6 +190,10 @@ test("an SDK refresh loser cannot invalidate a newer rotated winner", async () =
   expect((await winner.tokens())?.refresh_token).toBe("refresh-1")
   expect((await loser.tokens())?.refresh_token).toBe("refresh-1")
 
+  // The SDK discovers the authorization server before either exchange.
+  await winner.saveDiscoveryState({ authorizationServerUrl: "https://auth.refresh.example/" })
+  await loser.saveDiscoveryState({ authorizationServerUrl: "https://auth.refresh.example/" })
+
   // The winner's SDK exchange rotates R1 -> R2 before the losing exchange
   // reports invalid_grant and asks the provider to invalidate its rejected
   // credentials.

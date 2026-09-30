@@ -45,7 +45,13 @@ const transportCalls: Array<{
 type MockAuthProvider = {
   redirectToAuthorization?: (url: URL) => Promise<void>
   saveTokens?: (tokens: { access_token: string; token_type: string }) => Promise<void>
+  saveDiscoveryState?: (state: { authorizationServerUrl: string }) => Promise<void>
 }
+
+// The real SDK discovers the authorization server before it redirects and
+// again before it exchanges the code; tokens are bound to that discovery.
+const discover = (provider: MockAuthProvider | undefined) =>
+  provider?.saveDiscoveryState?.({ authorizationServerUrl: "https://auth.example.com/" })
 
 // Mock the transport constructors
 mock.module("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
@@ -74,6 +80,7 @@ mock.module("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
       if (connectWithoutAuthorization) return
       // Simulate OAuth redirect by calling the authProvider's redirectToAuthorization
       if (this.authProvider?.redirectToAuthorization) {
+        await discover(this.authProvider)
         await this.authProvider.redirectToAuthorization(new URL("https://auth.example.com/authorize?client_id=test"))
       }
       throw new MockUnauthorizedError()
@@ -82,6 +89,7 @@ mock.module("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
       // Mock successful auth completion
       finishAuthCalls++
       if (connectWithoutAuthorization) {
+        await discover(this.authProvider)
         await this.authProvider?.saveTokens?.({ access_token: "browser-test-token", token_type: "Bearer" })
       }
     }

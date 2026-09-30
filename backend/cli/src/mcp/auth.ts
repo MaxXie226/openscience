@@ -25,6 +25,25 @@ export namespace McpAuth {
   })
   export type ClientInfo = z.infer<typeof ClientInfo>
 
+  /** The authorization server that issued a credential: the server URL the
+   * resource advertised at authorization time and the token endpoint its
+   * metadata named. A refresh token and a client secret are only ever sent
+   * back there; a resource that later advertises another server gets a fresh
+   * user-visible authorization instead of the old credentials. */
+  export const Issuer = z.object({
+    authorizationServer: z.string().url(),
+    tokenEndpoint: z.string().url(),
+  })
+  export type Issuer = z.infer<typeof Issuer>
+
+  export function sameIssuer(left: Issuer | undefined, right: Issuer | undefined): boolean {
+    if (!left || !right) return false
+    return (
+      new URL(left.authorizationServer).toString() === new URL(right.authorizationServer).toString() &&
+      new URL(left.tokenEndpoint).toString() === new URL(right.tokenEndpoint).toString()
+    )
+  }
+
   export const OAuthCallback = z.discriminatedUnion("type", [
     z.object({ type: z.literal("code"), value: z.string() }),
     z.object({ type: z.literal("error"), value: z.string() }),
@@ -54,11 +73,17 @@ export namespace McpAuth {
       .regex(/^[a-f0-9]{64}$/)
       .optional(),
     oauthCallback: OAuthCallback.optional(),
+    /** The server a browser flow discovered, promoted to `credentialIssuer`
+     * when the flow's tokens are saved. */
+    oauthIssuer: Issuer.optional(),
     serverUrl: z.string().optional(),
     credentialAuthorityFingerprint: z
       .string()
       .regex(/^[a-f0-9]{64}$/)
       .optional(),
+    /** Who issued `tokens` and `clientInfo`. Absent only for credentials stored
+     * before issuers were recorded; their first refresh binds them. */
+    credentialIssuer: Issuer.optional(),
   })
   export type Entry = z.infer<typeof Entry>
 
@@ -99,8 +124,10 @@ export namespace McpAuth {
         z.object({ type: z.literal("cancelled") }),
       ])
       .optional(),
+    oauthIssuer: z.object({ authorizationServer: z.string(), tokenEndpoint: z.string() }).optional(),
     serverUrl: z.string().optional(),
     credentialAuthorityFingerprint: z.string().optional(),
+    credentialIssuer: z.object({ authorizationServer: z.string(), tokenEndpoint: z.string() }).optional(),
   })
   type StoredEntry = z.infer<typeof StoredEntry>
 
@@ -195,10 +222,12 @@ export namespace McpAuth {
         entry.oauthCallback?.type === "code" || entry.oauthCallback?.type === "error"
           ? { ...entry.oauthCallback, value: await McpSecretStorage.sealAuthority(entry.oauthCallback.value) }
           : entry.oauthCallback,
+      oauthIssuer: entry.oauthIssuer,
       serverUrl: entry.serverUrl,
       credentialAuthorityFingerprint: entry.credentialAuthorityFingerprint
         ? await McpSecretStorage.sealAuthority(entry.credentialAuthorityFingerprint)
         : undefined,
+      credentialIssuer: entry.credentialIssuer,
     })
   }
 
@@ -245,10 +274,12 @@ export namespace McpAuth {
         entry.oauthCallback?.type === "code" || entry.oauthCallback?.type === "error"
           ? { ...entry.oauthCallback, value: await McpSecretStorage.open(entry.oauthCallback.value) }
           : entry.oauthCallback,
+      oauthIssuer: entry.oauthIssuer,
       serverUrl: entry.serverUrl,
       credentialAuthorityFingerprint: entry.credentialAuthorityFingerprint
         ? await McpSecretStorage.open(entry.credentialAuthorityFingerprint)
         : undefined,
+      credentialIssuer: entry.credentialIssuer,
     })
     OpenScience.registerSecretValues(
       [
@@ -476,6 +507,7 @@ export namespace McpAuth {
     ) {
       delete entry.tokens
       delete entry.clientInfo
+      delete entry.credentialIssuer
       delete entry.oauthCompletedState
       delete entry.oauthCompletedAt
       delete entry.oauthCompletedFinalized
@@ -483,6 +515,19 @@ export namespace McpAuth {
     }
     entry.serverUrl = url
     entry.credentialAuthorityFingerprint = authorityFingerprint
+  }
+
+  function clearFlow(entry: Entry): void {
+    delete entry.oauthState
+    delete entry.oauthStartedAt
+    delete entry.oauthAuthorizationUrl
+    delete entry.oauthServerUrl
+    delete entry.oauthAuthorityFingerprint
+    delete entry.oauthAllowDisabled
+    delete entry.oauthSettling
+    delete entry.oauthCallback
+    delete entry.oauthIssuer
+    delete entry.codeVerifier
   }
 
   export function updateTokens(mcpName: string, tokens: Tokens, serverUrl?: string): Promise<void> {
@@ -526,22 +571,21 @@ export namespace McpAuth {
         const entry = Entry.parse(store[mcpName] ?? {})
         rebindAuthority(entry, serverUrl, authorityFingerprint)
         entry.tokens = next
+        entry.credentialIssuer = entry.oauthIssuer
         entry.oauthCompletedState = expectedState
         entry.oauthCompletedAt = Date.now()
         entry.oauthCompletedFinalized = false
         entry.oauthCompletedAuthorityFingerprint = authorityFingerprint
-        delete entry.oauthState
-        delete entry.oauthStartedAt
-        delete entry.oauthAuthorizationUrl
-        delete entry.oauthServerUrl
-        delete entry.oauthAuthorityFingerprint
-        delete entry.oauthAllowDisabled
-        delete entry.oauthSettling
-        delete entry.oauthCallback
-        delete entry.codeVerifier
+        clearFlow(entry)
         store[mcpName] = entry
       },
-      { condition: (store) => exactOAuthFlow(store[mcpName], expectedState, serverUrl, authorityFingerprint, true) },
+      {
+        // Tokens are only stored with the server that issued them: a flow that
+        // never recorded its discovery cannot bind them, so it saves nothing.
+        condition: (store) =>
+          exactOAuthFlow(store[mcpName], expectedState, serverUrl, authorityFingerprint, true) &&
+          !!store[mcpName]?.oauthIssuer,
+      },
     )
   }
 
@@ -621,24 +665,59 @@ export namespace McpAuth {
     tokens: Tokens,
     serverUrl: string,
     authorityFingerprint: string,
+    issuer: Issuer,
   ): Promise<boolean> {
     const next = Tokens.parse(tokens)
+    const bound = Issuer.parse(issuer)
     return update(
       `mcp-auth.tokens.refresh:${mcpName}`,
       (store) => {
         const entry = Entry.parse(store[mcpName] ?? {})
         rebindAuthority(entry, serverUrl, authorityFingerprint)
         entry.tokens = next
+        entry.credentialIssuer = bound
         store[mcpName] = entry
       },
       {
+        // A refreshed pair came from the issuer the old pair was bound to;
+        // a pair stored before issuers were recorded is bound by its refresh.
         condition: (store) => {
           const entry = store[mcpName]
           return (
             !!entry?.serverUrl &&
             normalizeServerUrl(entry.serverUrl) === normalizeServerUrl(serverUrl) &&
             entry.credentialAuthorityFingerprint === authorityFingerprint &&
-            entry.tokens?.refreshToken === expectedRefreshToken
+            entry.tokens?.refreshToken === expectedRefreshToken &&
+            (!entry.credentialIssuer || sameIssuer(entry.credentialIssuer, bound))
+          )
+        },
+      },
+    )
+  }
+
+  /** Record the authorization server a browser flow discovered. The flow's
+   * code exchange and its tokens are bound to this server; a second discovery
+   * naming another server does not replace it. */
+  export function updateOAuthIssuerIfOAuthFlow(
+    mcpName: string,
+    expectedState: string,
+    serverUrl: string,
+    authorityFingerprint: string,
+    issuer: Issuer,
+  ): Promise<boolean> {
+    const next = Issuer.parse(issuer)
+    return update(
+      `mcp-auth.issuer.flow:${mcpName}`,
+      (store) => {
+        store[mcpName]!.oauthIssuer = next
+      },
+      {
+        authority: false,
+        condition: (store) => {
+          const entry = store[mcpName]
+          return (
+            exactOAuthFlow(entry, expectedState, serverUrl, authorityFingerprint) &&
+            (!entry?.oauthIssuer || sameIssuer(entry.oauthIssuer, next))
           )
         },
       },
@@ -651,6 +730,8 @@ export namespace McpAuth {
     if (scope === "all" || scope === "client") delete entry.clientInfo
     if (scope === "all" || scope === "tokens") delete entry.tokens
     if (scope === "all" || scope === "verifier") delete entry.codeVerifier
+    // The issuer describes the credentials; once both are gone it says nothing.
+    if (!entry.tokens && !entry.clientInfo) delete entry.credentialIssuer
   }
 
   /** Apply an SDK invalidation only to the exact still-bound browser flow. */
@@ -698,7 +779,7 @@ export namespace McpAuth {
     return update(
       `mcp-auth.invalidate.refresh:${mcpName}`,
       (store) => {
-        delete store[mcpName]!.tokens
+        invalidate(store[mcpName]!, "tokens")
       },
       {
         condition: (store) => {
@@ -737,9 +818,16 @@ export namespace McpAuth {
         const entry = Entry.parse(store[mcpName] ?? {})
         rebindAuthority(entry, serverUrl, authorityFingerprint)
         entry.clientInfo = next
+        entry.credentialIssuer = entry.oauthIssuer
         store[mcpName] = entry
       },
-      { condition: (store) => exactOAuthFlow(store[mcpName], expectedState, serverUrl, authorityFingerprint) },
+      {
+        // A dynamically registered client belongs to the server that issued
+        // it, so the flow must have recorded that server first.
+        condition: (store) =>
+          exactOAuthFlow(store[mcpName], expectedState, serverUrl, authorityFingerprint) &&
+          !!store[mcpName]?.oauthIssuer,
+      },
     )
   }
 
@@ -783,6 +871,17 @@ export namespace McpAuth {
     return entry?.codeVerifier
   }
 
+  export async function oauthIssuerForOAuthFlow(
+    mcpName: string,
+    expectedState: string,
+    serverUrl: string,
+    authorityFingerprint: string,
+  ): Promise<Issuer | undefined> {
+    const entry = await get(mcpName)
+    if (!exactOAuthFlow(entry, expectedState, serverUrl, authorityFingerprint)) return undefined
+    return entry?.oauthIssuer
+  }
+
   export function clearCodeVerifier(mcpName: string): Promise<void> {
     return updateEntry(`mcp-auth.verifier.clear:${mcpName}`, mcpName, (entry) => delete entry.codeVerifier, undefined, {
       authority: false,
@@ -802,19 +901,16 @@ export namespace McpAuth {
         if (entry.oauthState && activeFlow(entry, entry.oauthState)) {
           throw new Error(`OAuth authorization is already in progress for MCP server: ${mcpName}`)
         }
+        clearFlow(entry)
         entry.oauthState = oauthState
         entry.oauthStartedAt = Date.now()
         entry.oauthServerUrl = binding ? new URL(binding.serverUrl).toString() : undefined
         entry.oauthAuthorityFingerprint = binding?.authorityFingerprint
         entry.oauthAllowDisabled = binding?.allowDisabled
-        delete entry.oauthSettling
         delete entry.oauthCompletedState
         delete entry.oauthCompletedAt
         delete entry.oauthCompletedFinalized
         delete entry.oauthCompletedAuthorityFingerprint
-        delete entry.oauthAuthorizationUrl
-        delete entry.oauthCallback
-        delete entry.codeVerifier
       },
       undefined,
       { authority: false },
@@ -921,15 +1017,7 @@ export namespace McpAuth {
       mcpName,
       (entry) => {
         if (entry.oauthState !== expected) throw new Error("OAuth state changed before it could be cleared")
-        delete entry.oauthState
-        delete entry.oauthStartedAt
-        delete entry.oauthAuthorizationUrl
-        delete entry.oauthServerUrl
-        delete entry.oauthAuthorityFingerprint
-        delete entry.oauthAllowDisabled
-        delete entry.oauthSettling
-        delete entry.oauthCallback
-        delete entry.codeVerifier
+        clearFlow(entry)
       },
       undefined,
       { authority: false },
@@ -943,16 +1031,7 @@ export namespace McpAuth {
     return update(
       `mcp-auth.flow.clear-if-current:${mcpName}`,
       (store) => {
-        const entry = store[mcpName]!
-        delete entry.oauthState
-        delete entry.oauthStartedAt
-        delete entry.oauthAuthorizationUrl
-        delete entry.oauthServerUrl
-        delete entry.oauthAuthorityFingerprint
-        delete entry.oauthAllowDisabled
-        delete entry.oauthSettling
-        delete entry.oauthCallback
-        delete entry.codeVerifier
+        clearFlow(store[mcpName]!)
       },
       {
         authority: false,

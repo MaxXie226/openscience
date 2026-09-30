@@ -125,11 +125,27 @@ test("OAuth token settlement is exact, durable, and cancellation-aware", async (
   })
   await McpAuth.recordOAuthCallback(state, { type: "code", value: "code-settlement" })
   expect(await McpAuth.claimOAuthSettlement(name, state, "code-settlement")).toBeTrue()
+  // Tokens are bound to the server the flow discovered; a flow that recorded
+  // no server cannot save any.
+  expect(
+    await McpAuth.updateTokensIfOAuthFlow(name, state, url, fingerprint, { accessToken: "settled-access" }),
+  ).toBeFalse()
+  const issuer = { authorizationServer: "https://auth.example/", tokenEndpoint: "https://auth.example/token" }
+  expect(await McpAuth.updateOAuthIssuerIfOAuthFlow(name, state, url, fingerprint, issuer)).toBeTrue()
+  // A second discovery naming another server does not replace the first.
+  expect(
+    await McpAuth.updateOAuthIssuerIfOAuthFlow(name, state, url, fingerprint, {
+      authorizationServer: "https://evil.example/",
+      tokenEndpoint: "https://evil.example/token",
+    }),
+  ).toBeFalse()
   expect(
     await McpAuth.updateTokensIfOAuthFlow(name, state, url, fingerprint, { accessToken: "settled-access" }),
   ).toBeTrue()
   expect(await McpAuth.pendingOAuthFlow(name)).toBeUndefined()
   expect(await McpAuth.completedOAuthFlow(name, state, url, fingerprint)).toBeTrue()
+  expect((await McpAuth.get(name))?.credentialIssuer).toEqual(issuer)
+  expect((await McpAuth.get(name))?.oauthIssuer).toBeUndefined()
 
   const cancelled = "cancelled"
   await McpAuth.updateOAuthState(cancelled, "cancel-state", {
@@ -163,6 +179,10 @@ test("OAuth authority rebinding never carries URL-only or cross-tenant credentia
     authorityFingerprint: nextFingerprint,
     allowDisabled: false,
   })
+  const issuer = { authorizationServer: "https://auth.same.example/", tokenEndpoint: "https://auth.same.example/token" }
+  expect(
+    await McpAuth.updateOAuthIssuerIfOAuthFlow(name, state, "https://same.example/mcp", nextFingerprint, issuer),
+  ).toBeTrue()
   const applied = await McpAuth.updateClientInfoIfOAuthFlow(name, state, "https://same.example/mcp", nextFingerprint, {
     clientId: "new-client",
   })
@@ -172,6 +192,7 @@ test("OAuth authority rebinding never carries URL-only or cross-tenant credentia
   expect(rebound?.tokens).toBeUndefined()
   expect(rebound?.clientInfo).toEqual({ clientId: "new-client" })
   expect(rebound?.credentialAuthorityFingerprint).toBe(nextFingerprint)
+  expect(rebound?.credentialIssuer).toEqual(issuer)
 })
 
 test("treats config-shaped and ciphertext-prefixed provider tokens as literal secret authority", async () => {

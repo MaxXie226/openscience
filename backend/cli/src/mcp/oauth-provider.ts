@@ -5,6 +5,7 @@ import {
   selectResourceURL,
   type OAuthClientProvider,
 } from "@modelcontextprotocol/sdk/client/auth.js"
+import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js"
 import type {
   OAuthClientMetadata,
   OAuthTokens,
@@ -48,13 +49,42 @@ export interface McpOAuthAuthority {
   allowDisabled?: boolean
 }
 
+/** The issuer a discovery names: the authorization server, and the token
+ * endpoint its metadata advertises (the SDK posts to `/token` on the server
+ * when there is no metadata). Both must pass the same network rule as any
+ * other discovered OAuth URL. */
+function issuerOf(
+  state: Pick<OAuthDiscoveryState, "authorizationServerUrl" | "authorizationServerMetadata">,
+  serverUrl: string,
+): McpAuth.Issuer {
+  const server = McpRemoteUrl.discovered(state.authorizationServerUrl, serverUrl, "OAuth authorization server URL")
+  const endpoint = McpRemoteUrl.discovered(
+    state.authorizationServerMetadata?.token_endpoint ?? new URL("/token", server),
+    serverUrl,
+    "OAuth token endpoint URL",
+  )
+  return { authorizationServer: server.toString(), tokenEndpoint: endpoint.toString() }
+}
+
 export class McpOAuthProvider implements OAuthClientProvider {
   private refreshCandidate?: string
+  /** The issuer this provider's current SDK `auth()` pass resolved: the bound
+   * one for stored credentials, or the one a legacy entry is about to be bound
+   * to. Tokens the SDK saves afterwards are recorded against it. */
+  private resolvedIssuer?: McpAuth.Issuer
 
   private async boundEntry(): Promise<McpAuth.Entry | undefined> {
     const fingerprint = this.authority?.authorityFingerprint
     if (!fingerprint) throw new Error(`MCP OAuth authority binding is missing for: ${this.mcpName}`)
     return McpAuth.getForAuthority(this.mcpName, this.serverUrl, fingerprint)
+  }
+
+  /** The issuer a browser flow has recorded so far, when this provider runs one. */
+  private async flowIssuer(): Promise<McpAuth.Issuer | undefined> {
+    const state = this.authority?.flowState
+    const fingerprint = this.authority?.authorityFingerprint
+    if (!state || !fingerprint) return undefined
+    return McpAuth.oauthIssuerForOAuthFlow(this.mcpName, state, this.serverUrl, fingerprint)
   }
 
   constructor(
@@ -136,6 +166,62 @@ export class McpOAuthProvider implements OAuthClientProvider {
       mcpName: this.mcpName,
       clientId: info.client_id,
     })
+  }
+
+  /** Where the SDK's own `auth()` sends credentials. Stored credentials name
+   * the server that issued them, and a browser flow names the server it
+   * redirected to, so the SDK never re-reads the resource's metadata to find
+   * a server for a refresh token, a client secret or an authorization code.
+   * Only a flow that has not discovered anything yet, or a credential stored
+   * before issuers were recorded, lets the SDK discover. */
+  async discoveryState(): Promise<OAuthDiscoveryState | undefined> {
+    const issuer = this.authority?.flowState ? await this.flowIssuer() : (await this.boundEntry())?.credentialIssuer
+    if (!issuer) return undefined
+    this.resolvedIssuer = issuer
+    return { authorizationServerUrl: issuer.authorizationServer }
+  }
+
+  /** The SDK reports what it discovered or restored. A discovery that names a
+   * server other than the one the credentials are bound to is the resource
+   * changing its metadata under an existing authorization: the credentials are
+   * not sent there, and the request fails so a fresh authorization can start. */
+  async saveDiscoveryState(state: OAuthDiscoveryState): Promise<void> {
+    const issuer = issuerOf(state, this.serverUrl)
+    const flowState = this.authority?.flowState
+    const fingerprint = this.authority?.authorityFingerprint
+    if (!fingerprint) throw new Error(`MCP OAuth authority binding is missing for: ${this.mcpName}`)
+    if (flowState) {
+      const applied = await McpAuth.updateOAuthIssuerIfOAuthFlow(
+        this.mcpName,
+        flowState,
+        this.serverUrl,
+        fingerprint,
+        issuer,
+      )
+      if (!applied) {
+        log.warn("authorization server changed during the OAuth flow; the flow is not continued", {
+          mcpName: this.mcpName,
+          authorizationServer: issuer.authorizationServer,
+        })
+        throw new Error(
+          `The authorization server for MCP server ${this.mcpName} changed during authorization; start the authorization again`,
+        )
+      }
+      this.resolvedIssuer = issuer
+      return
+    }
+    const bound = (await this.boundEntry())?.credentialIssuer
+    if (bound && !McpAuth.sameIssuer(bound, issuer)) {
+      log.warn("authorization server changed since authorization; stored credentials are not sent to it", {
+        mcpName: this.mcpName,
+        bound: bound.authorizationServer,
+        discovered: issuer.authorizationServer,
+      })
+      throw new Error(
+        `The authorization server for MCP server ${this.mcpName} changed since it was authorized; re-authorize to continue`,
+      )
+    }
+    this.resolvedIssuer = issuer
   }
 
   async tokens(): Promise<OAuthTokens | undefined> {
@@ -243,11 +329,30 @@ export class McpOAuthProvider implements OAuthClientProvider {
     }
     const client = await this.clientInformation()
     if (!client) throw new Error(`no OAuth client information for MCP server: ${this.mcpName}`)
+    const bound = (await this.boundEntry())?.credentialIssuer
+    // The resource's metadata still names the resource indicator, but it does
+    // not choose where the refresh token goes: that is the server that issued
+    // it. A credential stored before issuers were recorded follows the
+    // resource's current metadata once and is bound to that server.
     const metadata = await discoverOAuthProtectedResourceMetadata(this.serverUrl, undefined, guardedFetch).catch(
       () => undefined,
     )
-    const issuer = metadata?.authorization_servers?.[0] ?? new URL("/", this.serverUrl)
+    const issuer = bound
+      ? new URL(bound.authorizationServer)
+      : (metadata?.authorization_servers?.[0] ?? new URL("/", this.serverUrl))
     const server = await discoverAuthorizationServerMetadata(issuer, { fetchFn: guardedFetch })
+    const resolved = issuerOf(
+      { authorizationServerUrl: issuer.toString(), authorizationServerMetadata: server },
+      this.serverUrl,
+    )
+    if (bound && !McpAuth.sameIssuer(bound, resolved)) {
+      log.warn("the authorization server moved its token endpoint; stored credentials are not sent to it", {
+        mcpName: this.mcpName,
+        bound: bound.tokenEndpoint,
+        discovered: resolved.tokenEndpoint,
+      })
+      throw new Error(`The token endpoint for MCP server ${this.mcpName} changed since it was authorized`)
+    }
     const resource = await selectResourceURL(this.serverUrl, this, metadata)
     const tokens = await refreshAuthorization(issuer, {
       metadata: server,
@@ -273,13 +378,14 @@ export class McpOAuthProvider implements OAuthClientProvider {
       saved,
       this.serverUrl,
       fingerprint,
+      resolved,
     )
     if (!applied) {
       const winner = (await this.boundEntry())?.tokens
       if (!winner) throw new Error(`OAuth authority changed during refresh for MCP server: ${this.mcpName}`)
       return winner
     }
-    log.info("refreshed oauth tokens", { mcpName: this.mcpName })
+    log.info("refreshed oauth tokens", { mcpName: this.mcpName, authorizationServer: resolved.authorizationServer })
     return saved
   }
 
@@ -297,12 +403,17 @@ export class McpOAuthProvider implements OAuthClientProvider {
       await this.authority?.verify()
       if (this.refreshCandidate) {
         const expected = this.refreshCandidate
+        // The SDK refreshed against the issuer `discoveryState` handed it, or
+        // the one `saveDiscoveryState` accepted for a legacy entry.
+        const issuer = this.resolvedIssuer ?? (await this.boundEntry())?.credentialIssuer
+        if (!issuer) throw new Error(`OAuth issuer is unknown for refreshed tokens of MCP server: ${this.mcpName}`)
         const applied = await McpAuth.updateTokensIfRefreshToken(
           this.mcpName,
           expected,
           { ...next, refreshToken: next.refreshToken ?? expected },
           this.serverUrl,
           fingerprint,
+          issuer,
         )
         if (!applied) throw new Error(`OAuth authority changed before refresh persistence for: ${this.mcpName}`)
       } else if (flowState && fingerprint) {
@@ -321,7 +432,10 @@ export class McpOAuthProvider implements OAuthClientProvider {
     log.info("saved oauth tokens", { mcpName: this.mcpName })
   }
 
-  async invalidateCredentials(scope: "all" | "client" | "tokens" | "verifier"): Promise<void> {
+  async invalidateCredentials(scope: "all" | "client" | "tokens" | "verifier" | "discovery"): Promise<void> {
+    // The issuer binding is not a cache: it lives and dies with the
+    // credentials it describes, so a discovery reset does not loosen it.
+    if (scope === "discovery") return
     if ((scope === "all" || scope === "client") && this.config.clientId) {
       throw new Error(
         `OAuth client ${this.config.clientId} was rejected for MCP server ${this.mcpName}; review the configured client credentials`,
