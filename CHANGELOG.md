@@ -14,6 +14,8 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ### Changed
 
+- Reject zero shell timeouts and empty fuzzy edit matches, preserve the full shell output line allowance including unterminated lines, and make bounded grep results deterministic. Permission patterns expand only the exact HOME variable, and remembered shell grants keep ambiguous options tied to the approved command.
+
 - **The scanpy and AnnData skills keep raw counts in a layer.** Their workflows
   now save counts to `layers["counts"]` before normalizing, while `adata.raw`
   still holds log-normalized values for every gene so marker plots work after
