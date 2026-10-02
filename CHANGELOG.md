@@ -8,6 +8,8 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ## Unreleased
 
+- Windows desktop releases now sign the installer, app, bundled CLI, and native libraries with Inkvell Inc., and verify trusted, timestamped signatures before publication.
+
 - Keep legacy home configuration below canonical user and project settings, preserve inline overrides, and push the selected repository branch to its own tracked destination.
 - Scientific helpers correct GC content within the requested codon window and target band, report unusable CFSE channels clearly, and match BRENDA transformation keywords consistently across letter case. GPU inventory gives unnamed devices a readable fallback label.
 
