@@ -27,10 +27,21 @@ const Simulator = z
 // EDAM names published by the registry's /ontologies/EDAM endpoints. Registry
 // records carry the ontology IDs rather than these familiar format names.
 const formats: Record<string, string> = {
+  format_2332: "XML",
   format_2585: "SBML",
   format_3240: "CellML",
+  format_3621: "SQLite format",
   format_3971: "NeuroML",
   format_3972: "BNGL",
+  format_9000: "Virtual Cell Markup Language",
+  format_9001: "Smoldyn simulation configuration language",
+  format_9002: "Morpheus Markup Language",
+  format_9004: "Low Entropy Model Specification",
+  format_9005: "High Order Calculator",
+  format_9006: "Kappa",
+  format_9008: "GINsim Markup Language, Zipped",
+  format_9010: "XPP",
+  format_9012: "Resource Balance Analysis XML format",
 }
 
 const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "")

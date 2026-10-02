@@ -40,6 +40,33 @@ test("BioSimulators searches names, algorithm names/IDs, and all four model form
   )
 })
 
+test("BioSimulators names every model format the registry lists, not only the common four", async () => {
+  await withHttpTestPolicy(
+    {
+      resolveAddresses,
+      transport: async () =>
+        Response.json([
+          ...catalog,
+          {
+            id: "kasim",
+            name: "KaSim",
+            version: "4.1.2",
+            description: "Stochastic simulator for rule-based models.",
+            algorithms: [{ name: "SSA", kisaoId: { id: "KISAO_0000029" }, modelFormats: [{ id: "format_9006" }] }],
+          },
+        ]),
+    },
+    async () => {
+      // KaSim reads only Kappa, so without the name no format search reaches it.
+      expect((await biosimulators.search("Kappa")).map((hit) => hit.id)).toEqual(["kasim/4.1.2"])
+      const [neuron] = await biosimulators.search("Low Entropy Model Specification")
+      expect(neuron!.id).toBe("neuron/8.0.2")
+      const listed = (neuron!.extra as { algorithms: Array<{ modelFormats: string[] }> }).algorithms
+      expect(listed[0]!.modelFormats).toEqual(["Low Entropy Model Specification", "NeuroML", "High Order Calculator"])
+    },
+  )
+})
+
 test("BioSimulators requires a format and algorithm to occur together", async () => {
   await withHttpTestPolicy(
     {

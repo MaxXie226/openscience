@@ -12,6 +12,7 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 - Add a Claude Code terminal launcher that uses the installed CLI and its own login in the selected working folder.
 
 - Add a keyless BioSimulators registry connector for simulator, KiSAO algorithm, and model-format searches, with version-specific record retrieval.
+- Find BioSimulators tools by any model format the registry lists, such as Kappa or Virtual Cell Markup Language, and show format names instead of ontology IDs in results.
 - Add custom model Base URLs and OpenAI protocol selection, separate research-search setup status, and complete Chinese connection/form validation messages.
 
 - Add OpenAI GPT-6.1 Sol with Responses tool calling, supported reasoning efforts, current pricing, and Fast mode.
