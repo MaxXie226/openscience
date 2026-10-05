@@ -318,7 +318,8 @@ export function RightPane(
         danger: true,
       })
       if (!confirmed || !live || fileOwner() !== owner) return
-      setDirtyFiles([])
+      // Edits made while confirmation is open still need their own discard decision.
+      setDirtyFiles((items) => items.filter((item) => !pending.includes(item)))
     }
     for (const id of pending) {
       const tab = fileTabs().find((item) => item.id === id)
