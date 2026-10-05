@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
+import { applyPatch } from "diff"
 import { Patch } from "../../src/patch"
 import * as fs from "fs/promises"
 import * as path from "path"
@@ -297,6 +298,52 @@ PATCH`
         .then(() => true)
         .catch(() => false)
       expect(exists).toBe(true)
+    })
+  })
+
+  describe("deriveNewContentsFromChunks", () => {
+    test.each(["one\n\nthree\n", "one\n\nthree", "", "\n"])(
+      "round-trips blank lines and EOF for %j",
+      async (original) => {
+        const file = path.join(tempDir, "roundtrip.txt")
+        await Bun.write(file, original)
+        const lines = original.split("\n")
+        if (lines.at(-1) === "") lines.pop()
+        const result = Patch.deriveNewContentsFromChunks(file, [{ old_lines: lines, new_lines: ["first", "", "last"] }])
+        expect(applyPatch(original, result.unified_diff)).toBe(result.content)
+      },
+    )
+
+    test("declares the hunk line counts its body actually carries", async () => {
+      const file = path.join(tempDir, "counts.txt")
+      await fs.writeFile(file, ["one", "two", "three", "four", "five", ""].join("\n"))
+
+      const { unified_diff, content } = Patch.deriveNewContentsFromChunks(file, [
+        {
+          old_lines: ["one", "two", "three", "four", "five"],
+          new_lines: ["ONE", "two", "THREE", "four", "FIVE"],
+        },
+      ])
+
+      // Three removed and two context lines on the old side, three added and
+      // two context lines on the new side.
+      expect(unified_diff.split("\n")[0]).toBe("@@ -1,5 +1,5 @@")
+
+      // An applier trusts the header, so a hunk that understates itself is
+      // rejected rather than applied.
+      expect(applyPatch(["one", "two", "three", "four", "five", ""].join("\n"), unified_diff)).toBe(content)
+    })
+
+    test("keeps the header honest when a single line is replaced", async () => {
+      const file = path.join(tempDir, "single.txt")
+      await fs.writeFile(file, ["alpha", "beta", ""].join("\n"))
+
+      const { unified_diff, content } = Patch.deriveNewContentsFromChunks(file, [
+        { old_lines: ["beta"], new_lines: ["BETA"] },
+      ])
+
+      expect(unified_diff.split("\n")[0]).toBe("@@ -1,2 +1,2 @@")
+      expect(applyPatch(["alpha", "beta", ""].join("\n"), unified_diff)).toBe(content)
     })
   })
 

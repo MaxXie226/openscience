@@ -91,6 +91,22 @@ export namespace ACP {
     return getNewContent(content, diff)
   }
 
+  function parseTodoOutput(output: string) {
+    let raw: unknown
+    try {
+      raw = JSON.parse(output)
+    } catch (error) {
+      log.error("could not parse todowrite output as JSON", { error })
+      return undefined
+    }
+    const parsed = z.array(Todo.Info).safeParse(raw)
+    if (!parsed.success) {
+      log.error("failed to parse todo output", { error: parsed.error })
+      return undefined
+    }
+    return parsed.data
+  }
+
   export async function init({ sdk: _sdk }: { sdk: OpenScienceClient }) {
     return {
       create: (connection: AgentSideConnection, fullConfig: ACPConfig) => {
@@ -206,11 +222,15 @@ export namespace ACP {
                 const newContent = await editPreview(filepath, diff)
 
                 if (newContent) {
-                  this.connection.writeTextFile({
-                    sessionId: session.id,
-                    path: filepath,
-                    content: newContent,
-                  })
+                  this.connection
+                    .writeTextFile({
+                      sessionId: session.id,
+                      path: filepath,
+                      content: newContent,
+                    })
+                    .catch((error) => {
+                      log.error("failed to write ACP edit preview", { error, filepath })
+                    })
                 }
               }
 
@@ -329,14 +349,14 @@ export namespace ACP {
                 }
 
                 if (part.tool === "todowrite") {
-                  const parsedTodos = z.array(Todo.Info).safeParse(JSON.parse(part.state.output))
-                  if (parsedTodos.success) {
+                  const todos = parseTodoOutput(part.state.output)
+                  if (todos) {
                     await this.connection
                       .sessionUpdate({
                         sessionId,
                         update: {
                           sessionUpdate: "plan",
-                          entries: parsedTodos.data.map((todo) => {
+                          entries: todos.map((todo) => {
                             const status: PlanEntry["status"] =
                               todo.status === "cancelled" ? "completed" : (todo.status as PlanEntry["status"])
                             return {
@@ -350,8 +370,6 @@ export namespace ACP {
                       .catch((error) => {
                         log.error("failed to send session update for todo", { error })
                       })
-                  } else {
-                    log.error("failed to parse todo output", { error: parsedTodos.error })
                   }
                 }
 
@@ -590,7 +608,6 @@ export namespace ACP {
 
     async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
       try {
-        const cursor = params.cursor ? Number(params.cursor) : undefined
         const limit = 100
 
         const sessions = await this.sdk.session
@@ -603,8 +620,19 @@ export namespace ACP {
           )
           .then((x) => x.data ?? [])
 
-        const sorted = sessions.toSorted((a, b) => b.time.updated - a.time.updated)
-        const filtered = cursor ? sorted.filter((s) => s.time.updated < cursor) : sorted
+        const sorted = sessions.toSorted(
+          (a, b) => b.time.updated - a.time.updated || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+        )
+        const cursor = params.cursor ?? ""
+        const split = cursor.indexOf(":")
+        const cursorTime = cursor === "" ? Number.NaN : Number(split === -1 ? cursor : cursor.slice(0, split))
+        const cursorID = split === -1 ? "" : cursor.slice(split + 1)
+        const filtered = sorted.filter(
+          (session) =>
+            Number.isNaN(cursorTime) ||
+            session.time.updated < cursorTime ||
+            (split !== -1 && session.time.updated === cursorTime && session.id > cursorID),
+        )
         const page = filtered.slice(0, limit)
 
         const entries: SessionInfo[] = page.map((session) => ({
@@ -615,7 +643,7 @@ export namespace ACP {
         }))
 
         const last = page[page.length - 1]
-        const next = filtered.length > limit && last ? String(last.time.updated) : undefined
+        const next = filtered.length > limit && last ? `${last.time.updated}:${last.id}` : undefined
 
         const response: ListSessionsResponse = {
           sessions: entries,
@@ -800,14 +828,14 @@ export namespace ACP {
               }
 
               if (part.tool === "todowrite") {
-                const parsedTodos = z.array(Todo.Info).safeParse(JSON.parse(part.state.output))
-                if (parsedTodos.success) {
+                const todos = parseTodoOutput(part.state.output)
+                if (todos) {
                   await this.connection
                     .sessionUpdate({
                       sessionId,
                       update: {
                         sessionUpdate: "plan",
-                        entries: parsedTodos.data.map((todo) => {
+                        entries: todos.map((todo) => {
                           const status: PlanEntry["status"] =
                             todo.status === "cancelled" ? "completed" : (todo.status as PlanEntry["status"])
                           return {
@@ -821,8 +849,6 @@ export namespace ACP {
                     .catch((err) => {
                       log.error("failed to send session update for todo", { error: err })
                     })
-                } else {
-                  log.error("failed to parse todo output", { error: parsedTodos.error })
                 }
               }
 

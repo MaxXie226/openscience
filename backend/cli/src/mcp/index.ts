@@ -739,7 +739,7 @@ export namespace MCP {
     return commands
   }
 
-  export async function add(name: string, mcp: Config.Mcp) {
+  export async function add(name: string, mcp: Config.Mcp): Promise<{ status: Record<string, Status> }> {
     const s = await state()
     const result = await create(name, mcp)
     if (!result) {
@@ -748,8 +748,9 @@ export namespace MCP {
         error: "unknown error",
       }
       s.status[name] = status
+      // The route promises a status map on both success and failure.
       return {
-        status,
+        status: s.status,
       }
     }
     try {

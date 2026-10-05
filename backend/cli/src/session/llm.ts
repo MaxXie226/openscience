@@ -461,11 +461,12 @@ export namespace LLM {
   }
 
   async function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "user">) {
-    for (const tool of Object.keys(input.tools)) {
-      if (!ToolVisibility.enabled(tool, { permission: input.agent.permission, tools: input.user.tools }))
-        delete input.tools[tool]
+    // Retries reuse the caller's record; filtering and _noop insertion need an owned copy.
+    const tools: Record<string, Tool> = {}
+    for (const [id, value] of Object.entries(input.tools)) {
+      if (ToolVisibility.enabled(id, { permission: input.agent.permission, tools: input.user.tools })) tools[id] = value
     }
-    return input.tools
+    return tools
   }
 
   // Check if messages contain any tool-call content

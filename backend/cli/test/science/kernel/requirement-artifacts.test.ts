@@ -36,4 +36,22 @@ describe("requirementArtifacts", () => {
     expect(requirementArtifacts("")).toEqual([])
     expect(requirementArtifacts("   \n  ")).toEqual([])
   })
+
+  test.each([
+    "requests>=2.31",
+    "requests",
+    "requests @ https://example.invalid/a.whl",
+    "~=2.31",
+    "-e .",
+    "numpy==",
+    "numpy===1",
+    "numpy==1.*",
+  ])("rejects non-exact requirement %s", (line) => {
+    expect(() => requirementArtifacts(line)).toThrow("exact version pin")
+  })
+
+  test("does not silently discard an invalid requirement among valid pins", () => {
+    const requirements = [pin("numpy", "1.26.4", "a"), "requests>=2.31", pin("scipy", "1.11.4", "b")].join("\n")
+    expect(() => requirementArtifacts(requirements)).toThrow("exact version pin")
+  })
 })
