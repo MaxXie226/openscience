@@ -107,9 +107,10 @@ function formatInitError(error: InitError, t: Translator): string {
     }
     case "ConfigInvalidError": {
       const issues = Array.isArray(data.issues)
-        ? data.issues.map(
-            (issue: { message: string; path: string[] }) => "↳ " + issue.message + " " + issue.path.join("."),
-          )
+        ? data.issues.map((issue: { message: string; path: string[] }) => {
+            const location = issue.path.join(".")
+            return "↳ " + issue.message + (location ? " " + location : "")
+          })
         : []
       const message = typeof data.message === "string" ? data.message : ""
       const path = typeof data.path === "string" ? data.path : safeJson(data.path)

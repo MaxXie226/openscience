@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import katex from "katex"
+import DOMPurify from "dompurify"
 import morphdom from "morphdom"
 import { parseMarkdown } from "../context/marked"
 import {
@@ -267,4 +268,19 @@ describe("local Markdown file links", () => {
     expect(new Set((links[0].getAttribute("rel") ?? "").split(/\s+/))).toEqual(new Set(["noopener", "noreferrer"]))
     expect(links[1].hasAttribute("target")).toBe(false)
   })
+})
+
+test("unsupported sanitizers display escaped source without introducing HTML", () => {
+  const supported = DOMPurify.isSupported
+  Object.defineProperty(DOMPurify, "isSupported", { value: false, configurable: true })
+  try {
+    const source = "<img src=x onerror=\"alert(1)\"> & 'quoted'"
+    const root = document.createElement("div")
+    root.innerHTML = sanitize("<script>unsafe()</script>", source)
+    expect(root.textContent).toBe(source)
+    expect(root.querySelector("img, script")).toBeNull()
+    expect(sanitize("<script>unsafe()</script>")).toBe("")
+  } finally {
+    Object.defineProperty(DOMPurify, "isSupported", { value: supported, configurable: true })
+  }
 })

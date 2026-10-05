@@ -69,8 +69,8 @@ const iconPaths = {
   check: '<path d="M5 11.9657L8.37838 14.7529L15 5.83398" stroke="currentColor" stroke-linecap="square"/>',
 }
 
-export function sanitize(html: string) {
-  if (!DOMPurify.isSupported) return ""
+export function sanitize(html: string, source?: string) {
+  if (!DOMPurify.isSupported) return source === undefined ? "" : markdownFallback(source)
   return DOMPurify.sanitize(html, config)
 }
 
@@ -427,8 +427,9 @@ export function Markdown(
         }
       }
 
+      // Unsupported sanitizers can only display escaped source text.
       const safe = await marked.parse(markdown).then(
-        (next) => sanitize(next),
+        (next) => sanitize(next, markdown),
         () => markdownFallback(markdown),
       )
       if (key && hash) touch(key, { hash, html: safe })

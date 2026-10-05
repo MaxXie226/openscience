@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { chmod, lstat, mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises"
+import { chmod, lstat, mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
@@ -18,6 +18,7 @@ import {
   launch,
   newer,
   portable,
+  recover,
   release,
   reconcileTransactions,
   stage,
@@ -334,6 +335,43 @@ describe("desktop update release contract", () => {
     expect(trustedTransaction({ trusted: false, trust: required }, required)).toBe(false)
     expect(trustedTransaction({ trusted: true, trust: { ...required, team: "ATTACKER" } }, required)).toBe(false)
     expect(trustedTransaction({ trusted: true, trust: required }, required)).toBe(true)
+  })
+})
+
+describe("desktop pending update recovery", () => {
+  test("keeps the newest verified pending root and discards the stale one", async () => {
+    const cache = await realpath(await mkdtemp(path.join(os.tmpdir(), "openscience-desktop-recover-")))
+    roots.push(cache)
+    const stage = async (name: string, version: string) => {
+      const root = path.join(cache, name)
+      const bundle = path.join(root, "OpenScience.app")
+      await mkdir(path.join(bundle, "Contents"), { recursive: true })
+      await writeFile(path.join(bundle, "Contents", "Info.plist"), version)
+      await writeFile(
+        path.join(root, "manifest.json"),
+        JSON.stringify({ schema: 1, status: "ready", version, digest: "a".repeat(64), size: 1024, bundle }),
+      )
+      return root
+    }
+    const stale = await stage("pending-stale", "1.2.0")
+    const newest = await stage("pending-newest", "1.10.0")
+    const invalid = await stage("pending-invalid", "9.0.0")
+    const verified: string[] = []
+
+    const keep = await recover(cache, {
+      verify: async (bundle: string, version: string) => {
+        verified.push(path.dirname(bundle))
+        if (version === "9.0.0") throw new Error("invalid signature")
+        return undefined
+      },
+    })
+
+    expect(verified).toHaveLength(3)
+    expect(keep?.root).toBe(newest)
+    expect(keep?.version).toBe("1.10.0")
+    await expect(lstat(newest)).resolves.toBeDefined()
+    await expect(lstat(stale)).rejects.toMatchObject({ code: "ENOENT" })
+    await expect(lstat(invalid)).rejects.toMatchObject({ code: "ENOENT" })
   })
 })
 

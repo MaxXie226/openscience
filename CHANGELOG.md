@@ -8,6 +8,9 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ## Unreleased
 
+- Recover the newest verified desktop update, retain unsaved-file warnings when edits arrive during confirmation, and restore the live Modal job panel.
+- Preserve skill acronym casing, show escaped Markdown when sanitization is unavailable, and keep balance recovery details across gateway formatting changes.
+
 - Keep ACP session pagination complete at tied timestamps, tolerate malformed todo history, and handle rejected edit previews.
 - Preserve tool availability across retries, keep renamed provider web-search events consistent, and prevent stale Codex sign-in timers from clearing newer attempts.
 - Produce applicable patch previews with blank lines and accurate hunk counts; preserve fetched HTML text around skipped and embedded elements.
