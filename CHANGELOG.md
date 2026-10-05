@@ -8,6 +8,12 @@ tagged release also ships native binaries for Linux, macOS, and Windows.
 
 ## Unreleased
 
+- Keep ACP session pagination complete at tied timestamps, tolerate malformed todo history, and handle rejected edit previews.
+- Preserve tool availability across retries, keep renamed provider web-search events consistent, and prevent stale Codex sign-in timers from clearing newer attempts.
+- Produce applicable patch previews with blank lines and accurate hunk counts; preserve fetched HTML text around skipped and embedded elements.
+- Report corrupt configuration and process ledgers clearly, restore kernels around malformed saved records, and reject non-exact locked pip requirements.
+- Return consistent MCP status maps, honor zero session limits, ignore unknown HTTP range units, and tolerate diagnostic lines around SSH control responses.
+
 - Make GPT-6.1 Sol available through connected ChatGPT/Codex subscriptions, with supported reasoning levels and Fast mode.
 - Keep GPT-6 Sol available through Codex subscriptions while removing it from the Ace model roster.
 

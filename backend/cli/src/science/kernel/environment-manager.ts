@@ -457,6 +457,9 @@ export function requirementArtifacts(requirements: string) {
     .map((line) => {
       const pin = line.split(/\s+/u)[0]!
       const offset = pin.indexOf("==")
+      if (!/^[A-Za-z0-9_.-]+==[^=<>!~\s*]+$/u.test(pin)) {
+        throw new Error(`Locked pip requirement must use an exact version pin: ${pin}`)
+      }
       return {
         pin,
         name: pin.slice(0, offset),

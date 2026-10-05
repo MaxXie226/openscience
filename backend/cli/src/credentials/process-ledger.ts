@@ -102,10 +102,16 @@ export namespace CredentialProcessLedger {
       throw error
     })
     if (text === undefined) return []
-    const parsed: unknown = JSON.parse(text)
-    if (!Array.isArray(parsed) || !parsed.every(valid)) {
-      throw new Error(`Credential process ledger ${filepath} is corrupt; refusing unsafe process revocation`)
+    // Syntax and schema corruption both refuse revocation with the ledger path.
+    const corrupt = (cause?: unknown) =>
+      new Error(`Credential process ledger ${filepath} is corrupt; refusing unsafe process revocation`, { cause })
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch (error) {
+      throw corrupt(error)
     }
+    if (!Array.isArray(parsed) || !parsed.every(valid)) throw corrupt()
     return parsed
   }
 

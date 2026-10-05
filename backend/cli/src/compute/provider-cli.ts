@@ -241,7 +241,9 @@ export namespace ProviderCli {
 
   function provider(target: string): Provider {
     const canonical = target === "prime" ? "prime_intellect" : target
-    if (!(canonical in DOCTOR_SPECS)) throw new Error(`Compute provider ${target} has no reviewed native CLI broker`)
+    // Provider names must not resolve inherited Object.prototype members.
+    if (!Object.hasOwn(DOCTOR_SPECS, canonical))
+      throw new Error(`Compute provider ${target} has no reviewed native CLI broker`)
     return canonical as Provider
   }
 

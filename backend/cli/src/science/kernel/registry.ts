@@ -898,7 +898,12 @@ export namespace KernelRuntime {
     const paths = await Storage.list(prefix)
     await Promise.all(
       paths.map(async (path) => {
-        const value = Persisted.safeParse(await Storage.read<unknown>(path))
+        // One missing or malformed record must not prevent other kernels from being restored.
+        const stored = await Storage.read<unknown>(path).catch((error) => {
+          if (Storage.NotFoundError.isInstance(error) || error instanceof SyntaxError) return
+          throw error
+        })
+        const value = Persisted.safeParse(stored)
         if (!value.success || value.data.identity.projectID !== projectID) return
         if (sessionID && value.data.identity.sessionID !== sessionID) return
         if (!managers.has(value.data.identity.language)) return
